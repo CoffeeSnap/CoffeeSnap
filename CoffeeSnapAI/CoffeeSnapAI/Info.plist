@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>CoffeeSnap AI needs camera access to analyze your coffee photos and provide AI-powered insights.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>CoffeeSnap AI needs photo library access to save and analyze your coffee photos.</string>
+	<key>CFBundleDisplayName</key>
+	<string>CoffeeSnap AI</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.coffeesnap.ai</string>
+	<key>CFBundleName</key>
+	<string>CoffeeSnapAI</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>AccentColor</string>
+	</dict>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<string>armv7</string>
+		<string>camera-flash</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+</dict>
+</plist>

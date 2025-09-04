@@ -5,9 +5,9 @@ This is a learning project to understand **AI-powered mobile app development** u
 
 ## Who Built This Learning Project
 
-**Pierre-Henry Soria** — An Extremely **Passionate Data Scientist** who loves automating content creation efficiently with meaningful data! Also a true roquefort 🧀, ristretto ☕️, and dark chocolate lover! 😋
+**Pierre-Henry Soria** — An Extremely Passionate **Lead Software Engineer** who loves building and automating efficiently meaningful apps on his own too. Also, a TRUE cheese (roquefort) 🧀, ristretto/flate white ☕️, and dark chocolate lover! 😋
 
-Enthusiast of YouTube, AI, learning, and researching! Find me at [pH7.me](https://ph7.me)
+Enthusiast of AI, learning, managing, and researching! Find me at [pH7.me](https://ph7.me)
 
 Do you enjoy this project? **[Buy me a coffee](https://ko-fi.com/phenry)** (spoiler: I love almond extra-hot flat white coffees).
 

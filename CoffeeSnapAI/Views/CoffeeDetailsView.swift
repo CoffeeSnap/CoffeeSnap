@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 17.0, *)
 struct CoffeeDetailsView: View {
     let coffee: AnalyzedCoffee
     @EnvironmentObject var coffeeStore: CoffeeStore

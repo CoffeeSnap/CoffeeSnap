@@ -3,7 +3,7 @@ import SwiftUI
 
 // MARK: - Analyzed Coffee
 struct AnalyzedCoffee: Identifiable, Codable {
-    let id = UUID()
+    let id: UUID
     let imageData: Data?
     let coffeeType: CoffeeType
     let confidence: Double
@@ -17,6 +17,7 @@ struct AnalyzedCoffee: Identifiable, Codable {
     let rating: Double?
     
     init(imageData: Data?, coffeeType: CoffeeType, confidence: Double, brewMethod: String? = nil, roastLevel: RoastLevel = .medium, notes: String = "", recommendations: [String] = [], flavorProfile: FlavorProfile = FlavorProfile(), origin: String? = nil, rating: Double? = nil) {
+        self.id = UUID()
         self.imageData = imageData
         self.coffeeType = coffeeType
         self.confidence = confidence
@@ -125,6 +126,70 @@ enum CoffeeType: String, CaseIterable, Codable {
         case .redEye: return "👁️"
         case .blackEye: return "👁️"
         case .unknown: return "❓"
+        }
+    }
+}
+
+// MARK: - Roast Level
+enum RoastLevel: String, CaseIterable, Codable {
+    case light = "Light Roast"
+    case mediumLight = "Medium-Light Roast"
+    case medium = "Medium Roast"
+    case mediumDark = "Medium-Dark Roast"
+    case dark = "Dark Roast"
+    case extraDark = "Extra Dark Roast"
+    
+    var description: String {
+        switch self {
+        case .light:
+            return "Light brown color with no oil on surface. Bright acidity and floral notes."
+        case .mediumLight:
+            return "Slightly darker with more body than light roast. Still acidic with some sweetness."
+        case .medium:
+            return "Medium brown with balanced acidity and body. Most popular roast level."
+        case .mediumDark:
+            return "Rich, dark color with some oil on surface. Bittersweet aftertaste."
+        case .dark:
+            return "Dark brown to black with oily surface. Bold, smoky flavors."
+        case .extraDark:
+            return "Very dark, almost black with significant oil. Intense, bitter flavors."
+        }
+    }
+    
+    var emoji: String {
+        switch self {
+        case .light: return "☀️"
+        case .mediumLight: return "🌅"
+        case .medium: return "🌇"
+        case .mediumDark: return "🌆"
+        case .dark: return "🌃"
+        case .extraDark: return "🌑"
+        }
+    }
+}
+
+// MARK: - Coffee Strength
+enum CoffeeStrength: String, CaseIterable, Codable {
+    case mild = "Mild"
+    case medium = "Medium"
+    case strong = "Strong"
+    case extraStrong = "Extra Strong"
+    
+    var description: String {
+        switch self {
+        case .mild: return "Light and delicate flavor"
+        case .medium: return "Balanced strength and flavor"
+        case .strong: return "Bold and robust"
+        case .extraStrong: return "Intense and powerful"
+        }
+    }
+    
+    var emoji: String {
+        switch self {
+        case .mild: return "🟡"
+        case .medium: return "🟠"
+        case .strong: return "🔴"
+        case .extraStrong: return "🟣"
         }
     }
 }

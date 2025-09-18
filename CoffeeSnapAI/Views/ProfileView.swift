@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 17.0, *)
 struct ProfileView: View {
     @EnvironmentObject var coffeeStore: CoffeeStore
     @AppStorage("hasCompletedOnboarding") private var hasCompletedOnboarding = true

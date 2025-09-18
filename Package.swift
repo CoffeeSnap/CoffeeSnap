@@ -9,21 +9,25 @@ let package = Package(
         .iOS(.v17)
     ],
     products: [
-        .library(
-            name: "CoffeeSnapAI",
-            targets: ["CoffeeSnapAI"]),
+        .executable(name: "CoffeeSnapAI", targets: ["CoffeeSnapAI"])
     ],
     dependencies: [
-        // Add any third-party dependencies here if needed
-        // Example:
-        // .package(url: "https://github.com/apple/swift-algorithms", from: "1.0.0"),
+        .package(url: "https://github.com/stephencelis/SQLite.swift.git", from: "0.14.1"),
+        .package(url: "https://github.com/apple/swift-algorithms", from: "1.0.0")
     ],
     targets: [
-        .target(
+        .executableTarget(
             name: "CoffeeSnapAI",
-            dependencies: []),
+            dependencies: [
+                .product(name: "SQLite", package: "SQLite.swift"),
+                .product(name: "Algorithms", package: "swift-algorithms")
+            ],
+            path: "CoffeeSnapAI"
+        ),
         .testTarget(
             name: "CoffeeSnapAITests",
-            dependencies: ["CoffeeSnapAI"]),
+            dependencies: ["CoffeeSnapAI"],
+            path: "Tests"
+        )
     ]
 )

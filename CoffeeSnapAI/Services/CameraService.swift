@@ -1,8 +1,16 @@
 import Foundation
 import SwiftUI
 import AVFoundation
-import UIKit
 
+#if canImport(UIKit)
+import UIKit
+#endif
+#if canImport(AVFoundation)
+import AVFoundation
+#endif
+
+#if os(iOS)
+@available(iOS 17.0, *)
 class CameraService: NSObject, ObservableObject {
     @Published var isPermissionGranted = false
     @Published var capturedImage: UIImage?
@@ -207,3 +215,37 @@ struct CameraPreview: UIViewRepresentable {
         }
     }
 }
+#else
+// Fallback implementation for macOS
+@available(macOS 10.15, *)
+class CameraService: ObservableObject {
+    @Published var isPermissionGranted = false
+    @Published var capturedImage: NSImage?
+    @Published var isShowingCamera = false
+    @Published var error: String?
+    
+    func checkPermissions() {
+        // No camera access on macOS for this implementation
+        isPermissionGranted = false
+    }
+    
+    func requestPermission() {
+        isPermissionGranted = false
+    }
+    
+    func startSession() {
+        // No camera on macOS
+    }
+    
+    func capturePhoto() {
+        // No camera on macOS
+    }
+}
+
+@available(macOS 10.15, *)
+struct CameraPreview: View {
+    var body: some View {
+        Text("Camera not available on macOS")
+    }
+}
+#endif

@@ -2,8 +2,40 @@ import Foundation
 import SwiftUI
 import Vision
 import CoreML
-import UIKit
 
+#if canImport(UIKit)
+import UIKit
+typealias PlatformImage = UIImage
+#elseif canImport(AppKit)
+import AppKit
+typealias PlatformImage = NSImage
+#endif
+
+// MARK: - ML Error Types
+enum MLError: Error, LocalizedError {
+    case imageProcessingFailed
+    case visionAnalysisFailed(String)
+    case modelLoadingFailed
+    case unsupportedImageFormat
+    case noResultsFound
+    
+    var errorDescription: String? {
+        switch self {
+        case .imageProcessingFailed:
+            return "Failed to process the image"
+        case .visionAnalysisFailed(let message):
+            return "Vision analysis failed: \(message)"
+        case .modelLoadingFailed:
+            return "Failed to load the ML model"
+        case .unsupportedImageFormat:
+            return "Unsupported image format"
+        case .noResultsFound:
+            return "No coffee detected in the image"
+        }
+    }
+}
+
+@available(iOS 17.0, macOS 10.15, *)
 class MLService: ObservableObject {
     @Published var isAnalyzing = false
     @Published var analysisResult: AnalyzedCoffee?
@@ -12,7 +44,8 @@ class MLService: ObservableObject {
     private let visionQueue = DispatchQueue(label: "vision.queue", qos: .userInitiated)
     
     // MARK: - Public Methods
-    func analyzeCoffeeImage(_ image: UIImage, completion: @escaping (AnalyzedCoffee?) -> Void) {
+    @available(iOS 17.0, macOS 10.15, *)
+    func analyzeCoffeeImage(_ image: PlatformImage, completion: @escaping (AnalyzedCoffee?) -> Void) {
         isAnalyzing = true
         error = nil
         
@@ -27,7 +60,9 @@ class MLService: ObservableObject {
     }
     
     // MARK: - Private Methods
-    private func performVisionAnalysis(image: UIImage, completion: @escaping (AnalyzedCoffee?) -> Void) {
+    @available(iOS 17.0, macOS 10.15, *)
+    private func performVisionAnalysis(image: PlatformImage, completion: @escaping (AnalyzedCoffee?) -> Void) {
+        #if canImport(UIKit)
         guard let cgImage = image.cgImage else {
             DispatchQueue.main.async {
                 self.error = .imageProcessingFailed
@@ -35,6 +70,15 @@ class MLService: ObservableObject {
             completion(nil)
             return
         }
+        #elseif canImport(AppKit)
+        guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            DispatchQueue.main.async {
+                self.error = .imageProcessingFailed
+            }
+            completion(nil)
+            return
+        }
+        #endif
         
         // Create Vision request
         let request = VNClassifyImageRequest { [weak self] request, error in
@@ -47,7 +91,7 @@ class MLService: ObservableObject {
             }
             
             guard let observations = request.results as? [VNClassificationObservation],
-                  let topResult = observations.first else {
+                  !observations.isEmpty else {
                 DispatchQueue.main.async {
                     self?.error = .noResultsFound
                 }
@@ -64,10 +108,6 @@ class MLService: ObservableObject {
             completion(analyzedCoffee)
         }
         
-        // Configure the request
-        request.maximumLeafObservations = 10
-        request.maximumHierarchicalObservations = 10
-        
         // Perform the request
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         
@@ -81,7 +121,7 @@ class MLService: ObservableObject {
         }
     }
     
-    private func processVisionResults(observations: [VNClassificationObservation], originalImage: UIImage) -> AnalyzedCoffee {
+    private func processVisionResults(observations: [VNClassificationObservation], originalImage: PlatformImage) -> AnalyzedCoffee {
         // Analyze the top classifications and map them to coffee types
         let coffeeType = mapClassificationToCoffeeType(observations)
         let confidence = observations.first?.confidence ?? 0.0
@@ -93,8 +133,16 @@ class MLService: ObservableObject {
         let roastLevel = estimateRoastLevel(for: coffeeType, observations: observations)
         let origin = suggestOrigin(for: coffeeType)
         
-        // Convert image to data for storage
-        let imageData = originalImage.jpegData(compressionQuality: 0.8)
+        // Convert image to data for storage (cross-platform)
+        var imageData: Data?
+        #if canImport(UIKit)
+        imageData = originalImage.jpegData(compressionQuality: 0.8)
+        #elseif canImport(AppKit)
+        if let tiffData = originalImage.tiffRepresentation,
+           let bitmapRep = NSBitmapImageRep(data: tiffData) {
+            imageData = bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+        }
+        #endif
         
         return AnalyzedCoffee(
             imageData: imageData,
@@ -243,11 +291,11 @@ class MLService: ObservableObject {
         let identifiers = observations.prefix(5).map { $0.identifier.lowercased() }
         
         if identifiers.contains(where: { $0.contains("dark") || $0.contains("black") }) {
-            return .dark
+            return RoastLevel.dark
         } else if identifiers.contains(where: { $0.contains("light") || $0.contains("blonde") }) {
-            return .light
+            return RoastLevel.light
         } else {
-            return .medium // Default to medium roast
+            return RoastLevel.medium // Default to medium roast
         }
     }
     
@@ -262,26 +310,5 @@ class MLService: ObservableObject {
     private func generateAnalysisNotes(for coffeeType: CoffeeType, confidence: Float) -> String {
         let confidenceText = confidence > 0.8 ? "High confidence" : confidence > 0.5 ? "Moderate confidence" : "Low confidence"
         return "AI Analysis: \(confidenceText) identification as \(coffeeType.rawValue). Analysis based on visual characteristics including color, texture, and foam patterns."
-    }
-}
-
-// MARK: - ML Error Types
-enum MLError: LocalizedError {
-    case imageProcessingFailed
-    case visionAnalysisFailed(String)
-    case noResultsFound
-    case modelLoadingFailed
-    
-    var errorDescription: String? {
-        switch self {
-        case .imageProcessingFailed:
-            return "Failed to process the image"
-        case .visionAnalysisFailed(let message):
-            return "Vision analysis failed: \(message)"
-        case .noResultsFound:
-            return "No coffee detected in the image"
-        case .modelLoadingFailed:
-            return "Failed to load the ML model"
-        }
     }
 }

@@ -1,5 +1,11 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#elseif canImport(AppKit)
+import AppKit
+#endif
 
+@available(iOS 17.0, macOS 10.15, *)
 struct AppColor {
     // Primary brand colors
     static let primary = Color("PrimaryColor")
@@ -21,6 +27,7 @@ struct AppColor {
     static let info = Color.blue
     
     // Background colors
+    #if canImport(UIKit)
     static let background = Color(UIColor.systemBackground)
     static let secondaryBackground = Color(UIColor.secondarySystemBackground)
     static let tertiaryBackground = Color(UIColor.tertiarySystemBackground)
@@ -33,6 +40,21 @@ struct AppColor {
     // Component colors
     static let cardBackground = Color(UIColor.systemBackground)
     static let cardBorder = Color(UIColor.separator)
+    #else
+    // macOS fallback
+    static let background = Color(NSColor.windowBackgroundColor)
+    static let secondaryBackground = Color(NSColor.controlBackgroundColor)
+    static let tertiaryBackground = Color(NSColor.tertiarySystemFill)
+    
+    // Text colors
+    static let primaryText = Color(NSColor.labelColor)
+    static let secondaryText = Color(NSColor.secondaryLabelColor)
+    static let tertiaryText = Color(NSColor.tertiaryLabelColor)
+    
+    // Component colors
+    static let cardBackground = Color(NSColor.windowBackgroundColor)
+    static let cardBorder = Color(NSColor.separatorColor)
+    #endif
     static let buttonBackground = coffeeBean
     static let buttonText = Color.white
     

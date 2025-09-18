@@ -1,5 +1,6 @@
 import SwiftUI
 
+@available(iOS 17.0, *)
 struct HistoryView: View {
     @EnvironmentObject var coffeeStore: CoffeeStore
     @State private var searchText = ""

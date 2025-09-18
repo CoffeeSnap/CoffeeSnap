@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 
+@available(iOS 17.0, *)
 struct CameraView: View {
     @EnvironmentObject var coffeeStore: CoffeeStore
     @StateObject private var cameraService = CameraService()

@@ -1,184 +1,301 @@
 import Foundation
 import SwiftUI
 
-@available(iOS 17.0, *)
 @MainActor
-class CoffeeStore: ObservableObject {
-    @Published var coffees: [AnalyzedCoffee] = []
-    @Published var favorites: Set<UUID> = []
+final class CoffeeStore: ObservableObject {
+    @Published private(set) var coffees: [AnalyzedCoffee] = []
+    @Published private(set) var favorites: Set<UUID> = []
+    @Published private(set) var dashboard = MemoryDashboard.empty
+    @Published private(set) var isLoading = false
+    @Published private(set) var hasStarted = false
+    @Published private(set) var errorMessage: String?
+    @Published private(set) var calibration: TasteCalibration?
+    @Published private(set) var recommendationExposureID = UUID()
     @Published var searchText = ""
-    @Published var selectedFilter: CoffeeType? = nil
-    @Published var isLoading = false
-    
-    private let vectorDBService = VectorDatabaseService.shared
-    
-    init() {
-        loadSampleData()
-        Task {
-            await vectorDBService.initialize()
-        }
+
+    private let database: any VectorMemoryRepository
+    private let engine = TasteMemoryEngine()
+    private var signals: [MemorySignal] = []
+    private var reviewCards: [ReviewCard] = []
+    private var activeRecommendationSessionID = UUID()
+    private var lastExposedRecommendationID: UUID?
+    private var recommendationSeed = UInt64.random(in: UInt64.min...UInt64.max)
+    private var pendingAttributions: [UUID: RecommendationAttribution] = [:]
+    private let recommendationPolicyVersion = RecommendationPolicy.version
+
+    init(database: any VectorMemoryRepository = VectorDatabaseService.shared) {
+        self.database = database
     }
-    
+
     var filteredCoffees: [AnalyzedCoffee] {
-        var result = coffees
-        
-        if !searchText.isEmpty {
-            result = result.filter { coffee in
-                coffee.coffeeType.rawValue.localizedCaseInsensitiveContains(searchText) ||
-                coffee.notes.localizedCaseInsensitiveContains(searchText) ||
-                coffee.flavorProfile.flavorNotes.contains { $0.localizedCaseInsensitiveContains(searchText) }
+        guard !searchText.isEmpty else { return coffees }
+        return coffees.filter { coffee in
+            coffee.coffeeType.rawValue.localizedCaseInsensitiveContains(searchText) ||
+            coffee.origin?.localizedCaseInsensitiveContains(searchText) == true ||
+            coffee.notes.localizedCaseInsensitiveContains(searchText) ||
+            coffee.flavorProfile.flavorNotes.contains {
+                $0.localizedCaseInsensitiveContains(searchText)
             }
         }
-        
-        if let filter = selectedFilter {
-            result = result.filter { $0.coffeeType == filter }
+    }
+
+    var nextReview: ReviewCard? { dashboard.dueCards.first }
+    var needsCalibration: Bool { hasStarted && calibration == nil && coffees.isEmpty && !isLoading }
+    var policyDiagnostics: RecommendationPolicyDiagnostics {
+        engine.policyDiagnostics(signals: signals)
+    }
+
+    func start() async {
+        guard !isLoading else { return }
+        isLoading = true
+        defer {
+            isLoading = false
+            hasStarted = true
         }
-        
-        return result.sorted { $0.analysisDate > $1.analysisDate }
+        do {
+            try await database.initialize()
+            coffees = try await database.loadCoffees()
+            calibration = try await database.loadCalibration()
+            try await refreshMemory()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
-    
-    var favoriteCoffees: [AnalyzedCoffee] {
-        return coffees.filter { favorites.contains($0.id) }
-    }
-    
+
     func addCoffee(_ coffee: AnalyzedCoffee) async {
-        coffees.insert(coffee, at: 0)
-        
-        // Store in vector database for similarity search
-        await vectorDBService.storeCoffeeVector(coffee)
+        do {
+            try await database.upsert(coffee, cards: engine.reviewCards(for: coffee))
+            try await database.append(MemorySignal(coffeeID: coffee.id, kind: .tasted, value: 1))
+            if let rating = coffee.rating {
+                try await database.append(MemorySignal(coffeeID: coffee.id, kind: .rated, value: rating / 5))
+            }
+            if let candidateID = coffee.sourceCandidateID {
+                let attribution = pendingAttributions.removeValue(forKey: candidateID)
+                try await database.append(MemorySignal(
+                    coffeeID: candidateID,
+                    kind: .recommendationConverted,
+                    value: (coffee.rating ?? 3.5) / 5,
+                    position: attribution?.position,
+                    policyScore: attribution?.score,
+                    policyProbability: attribution?.probability,
+                    policyVersion: recommendationPolicyVersion,
+                    catalogVersion: CoffeeCatalog.version,
+                    sessionID: attribution?.sessionID ?? activeRecommendationSessionID
+                ))
+            }
+            coffees.removeAll { $0.id == coffee.id }
+            coffees.insert(coffee, at: 0)
+            try await refreshMemory()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
-    
-    func searchSimilarCoffees(to coffee: AnalyzedCoffee, limit: Int = 5) async -> [AnalyzedCoffee] {
-        let similarIds = await vectorDBService.findSimilarCoffees(
-            flavorProfile: coffee.flavorProfile,
-            coffeeType: coffee.coffeeType,
-            limit: limit
-        )
-        
-        return coffees.filter { similarIds.contains($0.id) }
+
+    func rate(_ coffeeID: UUID, rating: Double) async {
+        guard let index = coffees.firstIndex(where: { $0.id == coffeeID }) else { return }
+        coffees[index].rating = rating.clamped(to: 0...5)
+        do {
+            try await database.upsert(coffees[index], cards: engine.reviewCards(for: coffees[index]))
+            try await database.append(MemorySignal(
+                coffeeID: coffeeID,
+                kind: .rated,
+                value: rating.clamped(to: 0...5) / 5
+            ))
+            try await refreshMemory()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
-    
-    func getRecommendationsFor(_ coffee: AnalyzedCoffee) async -> [AnalyzedCoffee] {
-        return await searchSimilarCoffees(to: coffee, limit: 3)
-    }
-    
-    func toggleFavorite(_ coffeeId: UUID) {
-        if favorites.contains(coffeeId) {
-            favorites.remove(coffeeId)
+
+    func toggleFavorite(_ coffeeID: UUID) async {
+        let isRemoving = favorites.contains(coffeeID)
+        if isRemoving {
+            favorites.remove(coffeeID)
         } else {
-            favorites.insert(coffeeId)
+            favorites.insert(coffeeID)
         }
-        
-        // Persist favorites to UserDefaults
-        let favoriteIds = Array(favorites).map { $0.uuidString }
-        UserDefaults.standard.set(favoriteIds, forKey: "favorite_coffees")
-    }
-    
-    func isFavorite(_ coffeeId: UUID) -> Bool {
-        favorites.contains(coffeeId)
-    }
-    
-    func deleteCoffee(_ coffee: AnalyzedCoffee) {
-        coffees.removeAll { $0.id == coffee.id }
-        favorites.remove(coffee.id)
-        
-        Task {
-            await vectorDBService.deleteCoffeeVector(coffee.id)
+        do {
+            try await database.append(MemorySignal(
+                coffeeID: coffeeID,
+                kind: isRemoving ? .unfavorited : .favorited,
+                value: isRemoving ? 0 : 1
+            ))
+            try await refreshMemory()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
-    
-    func getCoffeeStatistics() -> CoffeeStatistics {
-        let typeCount = Dictionary(grouping: coffees, by: { $0.coffeeType })
-            .mapValues { $0.count }
-        
-        let averageRating = coffees.compactMap { $0.rating }.reduce(0, +) / Double(coffees.count)
-        let totalCoffees = coffees.count
-        let favoritesCount = favorites.count
-        
-        return CoffeeStatistics(
-            totalCoffees: totalCoffees,
-            favoritesCount: favoritesCount,
-            averageRating: averageRating.isNaN ? 0 : averageRating,
-            coffeeTypeDistribution: typeCount
+
+    func exposeRecommendations() async {
+        guard !dashboard.recommendations.isEmpty,
+              lastExposedRecommendationID != recommendationExposureID else { return }
+        activeRecommendationSessionID = UUID()
+        do {
+            for (index, recommendation) in dashboard.recommendations.enumerated() {
+                let signal = MemorySignal(
+                    coffeeID: recommendation.id,
+                    kind: .recommendationShown,
+                    value: 1,
+                    position: index + 1,
+                    policyScore: recommendation.score,
+                    policyProbability: recommendation.selectionProbability,
+                    policyVersion: recommendationPolicyVersion,
+                    catalogVersion: CoffeeCatalog.version,
+                    policyActions: recommendation.policyActions,
+                    sessionID: activeRecommendationSessionID
+                )
+                try await database.append(signal)
+                signals.append(signal)
+            }
+            lastExposedRecommendationID = recommendationExposureID
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func recordRecommendation(_ recommendation: MemoryRecommendation, opened: Bool) async {
+        let position = dashboard.recommendations.firstIndex { $0.id == recommendation.id }.map { $0 + 1 }
+        do {
+            let signal = MemorySignal(
+                coffeeID: recommendation.id,
+                kind: opened ? .recommendationOpened : .recommendationSkipped,
+                value: opened ? 1 : 0,
+                position: position,
+                policyScore: recommendation.score,
+                policyProbability: recommendation.selectionProbability,
+                policyVersion: recommendationPolicyVersion,
+                catalogVersion: CoffeeCatalog.version,
+                sessionID: activeRecommendationSessionID
+            )
+            try await database.append(signal)
+            signals.append(signal)
+            if opened {
+                pendingAttributions[recommendation.id] = RecommendationAttribution(
+                    sessionID: activeRecommendationSessionID,
+                    position: position,
+                    score: recommendation.score,
+                    probability: recommendation.selectionProbability
+                )
+            } else {
+                try await refreshMemory()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func gradeNextReview(_ grade: ReviewGrade) async {
+        guard let card = nextReview else { return }
+        let updated = engine.applyReview(grade, to: card)
+        do {
+            try await database.update(updated)
+            if let index = reviewCards.firstIndex(where: { $0.id == updated.id }) {
+                reviewCards[index] = updated
+            }
+            rebuildDashboard()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func delete(_ coffeeID: UUID) async {
+        do {
+            try await database.deleteCoffee(coffeeID)
+            coffees.removeAll { $0.id == coffeeID }
+            favorites.remove(coffeeID)
+            try await refreshMemory()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func saveCalibration(_ value: TasteCalibration) async {
+        do {
+            try await database.saveCalibration(value)
+            calibration = value
+            renewRecommendationPolicy()
+            rebuildDashboard()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func visualMatches(for coffee: AnalyzedCoffee, limit: Int = 5) async -> [VisualSearchResult] {
+        guard let imageData = coffee.imageData else { return [] }
+        do {
+            let results = try await database.searchVisually(
+                similarTo: imageData,
+                limit: limit + 1
+            )
+            return Array(results.filter { $0.coffee.id != coffee.id }.prefix(limit))
+        } catch {
+            errorMessage = error.localizedDescription
+            return []
+        }
+    }
+
+    func clearError() {
+        errorMessage = nil
+    }
+
+    private func refreshMemory() async throws {
+        signals = try await database.loadSignals()
+        reviewCards = try await database.loadReviewCards()
+        calibration = try await database.loadCalibration()
+        favorites = replayFavorites(signals)
+        renewRecommendationPolicy()
+        rebuildDashboard()
+    }
+
+    private func rebuildDashboard(now: Date = Date()) {
+        let profile = engine.buildProfile(
+            coffees: coffees,
+            signals: signals,
+            calibration: calibration,
+            now: now
+        )
+        dashboard = MemoryDashboard(
+            profile: profile,
+            recommendations: engine.recommendations(
+                profile: profile,
+                memories: coffees,
+                signals: signals,
+                samplingSeed: recommendationSeed
+            ),
+            dueCards: engine.interleavedDueCards(reviewCards, now: now),
+            totalMemories: coffees.count,
+            memoryHealth: engine.memoryHealth(cards: reviewCards, now: now)
         )
     }
-    
-    private func loadSampleData() {
-        let sampleCoffees = [
-            AnalyzedCoffee(
-                imageData: nil,
-                coffeeType: .espresso,
-                confidence: 0.95,
-                brewMethod: "Traditional Italian",
-                roastLevel: .dark,
-                notes: "Rich, intense flavor with hints of chocolate",
-                recommendations: ["Serve immediately", "Pair with dark chocolate", "Water temp: 92-96°C"],
-                flavorProfile: FlavorProfile(
-                    acidity: 0.8,
-                    body: 0.9,
-                    sweetness: 0.3,
-                    bitterness: 0.7,
-                    flavorNotes: ["chocolate", "caramel", "nutty"]
-                ),
-                origin: "Ethiopia",
-                rating: 4.5
-            ),
-            AnalyzedCoffee(
-                imageData: nil,
-                coffeeType: .latte,
-                confidence: 0.88,
-                brewMethod: "Steamed milk art",
-                roastLevel: .medium,
-                notes: "Smooth and creamy with perfect milk integration",
-                recommendations: ["Milk temp: 60-65°C", "Create latte art", "Use whole milk"],
-                flavorProfile: FlavorProfile(
-                    acidity: 0.4,
-                    body: 0.7,
-                    sweetness: 0.8,
-                    bitterness: 0.3,
-                    flavorNotes: ["vanilla", "caramel", "milk chocolate"]
-                ),
-                origin: "Brazil",
-                rating: 4.2
-            ),
-            AnalyzedCoffee(
-                imageData: nil,
-                coffeeType: .pourOver,
-                confidence: 0.92,
-                brewMethod: "V60 pour over",
-                roastLevel: .light,
-                notes: "Bright and fruity with floral aromatics",
-                recommendations: ["Use paper filter", "Circular pour technique", "Medium-fine grind"],
-                flavorProfile: FlavorProfile(
-                    acidity: 0.9,
-                    body: 0.5,
-                    sweetness: 0.6,
-                    bitterness: 0.2,
-                    flavorNotes: ["citrus", "floral", "berry", "bright"]
-                ),
-                origin: "Kenya",
-                rating: 4.7
-            )
-        ]
-        
-        coffees = sampleCoffees
-        loadFavorites()
+
+    private func renewRecommendationPolicy() {
+        recommendationSeed = UInt64.random(in: UInt64.min...UInt64.max)
+        recommendationExposureID = UUID()
     }
-    
-    private func loadFavorites() {
-        let savedFavorites = UserDefaults.standard.stringArray(forKey: "favorite_coffees") ?? []
-        favorites = Set(savedFavorites.compactMap { UUID(uuidString: $0) })
+
+    private func replayFavorites(_ signals: [MemorySignal]) -> Set<UUID> {
+        var result: Set<UUID> = []
+        for signal in signals.sorted(by: { $0.timestamp < $1.timestamp }) {
+            switch signal.kind {
+            case .favorited: result.insert(signal.coffeeID)
+            case .unfavorited: result.remove(signal.coffeeID)
+            default: break
+            }
+        }
+        return result
     }
+
 }
 
-// MARK: - Coffee Statistics
-struct CoffeeStatistics {
-    let totalCoffees: Int
-    let favoritesCount: Int
-    let averageRating: Double
-    let coffeeTypeDistribution: [CoffeeType: Int]
-    
-    var mostPopularType: CoffeeType? {
-        coffeeTypeDistribution.max { $0.value < $1.value }?.key
+private struct RecommendationAttribution {
+    let sessionID: UUID
+    let position: Int?
+    let score: Double
+    let probability: Double
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }

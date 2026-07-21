@@ -1,319 +1,406 @@
 import XCTest
 @testable import CoffeeSnapAI
 
-@MainActor
-final class CoffeeStoreIntegrationTests: XCTestCase {
-    
-    var coffeeStore: CoffeeStore!
-    var vectorService: VectorDatabaseService!
-    
-    override func setUp() async throws {
-        try await super.setUp()
-        
-        // Initialize services
-        vectorService = VectorDatabaseService.shared
-        await vectorService.initialize()
-        
-        coffeeStore = CoffeeStore()
-        
-        // Wait a moment for initialization
-        try await Task.sleep(nanoseconds: 100_000_000) // 100ms
-    }
-    
-    override func tearDown() async throws {
-        coffeeStore = nil
-        try await super.tearDown()
-    }
-    
-    // MARK: - Basic Operations Tests
-    
-    func testCoffeeStoreInitialization() throws {
-        // Test that store initializes with sample data
-        XCTAssertGreaterThan(coffeeStore.coffees.count, 0, "Store should initialize with sample data")
-        XCTAssertTrue(coffeeStore.favorites.isEmpty || !coffeeStore.favorites.isEmpty, "Favorites should be initialized")
-        XCTAssertEqual(coffeeStore.searchText, "", "Search text should be empty initially")
-        XCTAssertNil(coffeeStore.selectedFilter, "No filter should be selected initially")
-    }
-    
-    func testAddCoffeeToStore() async throws {
-        let initialCount = coffeeStore.coffees.count
-        
-        let newCoffee = AnalyzedCoffee(
-            imageData: nil,
-            coffeeType: .cappuccino,
-            confidence: 0.9,
-            brewMethod: "Traditional",
-            roastLevel: .medium,
-            notes: "Test coffee for integration testing",
-            recommendations: ["Test recommendation"],
-            flavorProfile: FlavorProfile(
-                acidity: 0.6,
-                body: 0.7,
-                sweetness: 0.5,
-                bitterness: 0.4,
-                flavorNotes: ["vanilla", "caramel"]
-            ),
-            origin: "Test Origin",
-            rating: 4.0
+final class TasteMemoryEngineTests: XCTestCase {
+    private let engine = TasteMemoryEngine()
+
+    func testCalibrationCreatesAnHonestColdStartProfile() {
+        let calibration = TasteCalibration(
+            acidity: 0.85,
+            body: 0.25,
+            sweetness: 0.75,
+            bitterness: 0.15,
+            adventure: 0.9,
+            flavorNotes: ["Jasmine", "Citrus", "jasmine"],
+            updatedAt: Date(timeIntervalSince1970: 2_000_000_000)
         )
-        
-        await coffeeStore.addCoffee(newCoffee)
-        
-        XCTAssertEqual(coffeeStore.coffees.count, initialCount + 1, "Coffee count should increase by 1")
-        XCTAssertEqual(coffeeStore.coffees.first?.notes, "Test coffee for integration testing", "New coffee should be first in list")
-    }
-    
-    func testToggleFavorite() throws {
-        guard let firstCoffee = coffeeStore.coffees.first else {
-            XCTFail("No coffee available for testing")
-            return
-        }
-        
-        let coffeeId = firstCoffee.id
-        let initialFavoriteState = coffeeStore.isFavorite(coffeeId)
-        
-        // Toggle favorite
-        coffeeStore.toggleFavorite(coffeeId)
-        XCTAssertEqual(coffeeStore.isFavorite(coffeeId), !initialFavoriteState, "Favorite state should toggle")
-        
-        // Toggle back
-        coffeeStore.toggleFavorite(coffeeId)
-        XCTAssertEqual(coffeeStore.isFavorite(coffeeId), initialFavoriteState, "Favorite state should return to original")
-    }
-    
-    // MARK: - Search and Filter Tests
-    
-    func testSearchFunctionality() throws {
-        // Test search by coffee type
-        coffeeStore.searchText = "espresso"
-        let espressoResults = coffeeStore.filteredCoffees
-        
-        for coffee in espressoResults {
-            let matchesType = coffee.coffeeType.rawValue.localizedCaseInsensitiveContains("espresso")
-            let matchesNotes = coffee.notes.localizedCaseInsensitiveContains("espresso")
-            let matchesFlavorNotes = coffee.flavorProfile.flavorNotes.contains { $0.localizedCaseInsensitiveContains("espresso") }
-            
-            XCTAssertTrue(matchesType || matchesNotes || matchesFlavorNotes, "Search results should match search term")
-        }
-        
-        // Clear search
-        coffeeStore.searchText = ""
-        XCTAssertEqual(coffeeStore.filteredCoffees.count, coffeeStore.coffees.count, "Clearing search should show all coffees")
-    }
-    
-    func testFilterFunctionality() throws {
-        // Test filter by coffee type
-        coffeeStore.selectedFilter = .latte
-        let latteResults = coffeeStore.filteredCoffees
-        
-        for coffee in latteResults {
-            XCTAssertEqual(coffee.coffeeType, .latte, "Filtered results should only contain lattes")
-        }
-        
-        // Clear filter
-        coffeeStore.selectedFilter = nil
-        XCTAssertEqual(coffeeStore.filteredCoffees.count, coffeeStore.coffees.count, "Clearing filter should show all coffees")
-    }
-    
-    func testCombinedSearchAndFilter() throws {
-        // Add a latte with specific notes for testing
-        let testCoffee = AnalyzedCoffee(
-            imageData: nil,
-            coffeeType: .latte,
-            confidence: 0.85,
-            notes: "smooth vanilla latte",
-            flavorProfile: FlavorProfile(flavorNotes: ["vanilla", "milk"]),
-            rating: 4.3
+
+        let profile = engine.buildProfile(
+            coffees: [],
+            signals: [],
+            calibration: calibration,
+            now: calibration.updatedAt
         )
-        
-        Task {
-            await coffeeStore.addCoffee(testCoffee)
-        }
-        
-        // Apply both search and filter
-        coffeeStore.searchText = "vanilla"
-        coffeeStore.selectedFilter = .latte
-        
-        let results = coffeeStore.filteredCoffees
-        
-        for coffee in results {
-            XCTAssertEqual(coffee.coffeeType, .latte, "Results should be filtered to lattes")
-            let hasVanilla = coffee.notes.localizedCaseInsensitiveContains("vanilla") ||
-                           coffee.flavorProfile.flavorNotes.contains { $0.localizedCaseInsensitiveContains("vanilla") }
-            XCTAssertTrue(hasVanilla, "Results should contain vanilla")
+
+        XCTAssertFalse(profile.vector.isEmpty)
+        XCTAssertEqual(profile.observationCount, 0)
+        XCTAssertEqual(profile.acidity, calibration.acidity, accuracy: 0.0001)
+        XCTAssertEqual(profile.body, calibration.body, accuracy: 0.0001)
+        XCTAssertEqual(profile.adventure, calibration.adventure, accuracy: 0.0001)
+        XCTAssertEqual(Set(profile.topNotes), Set(["citrus", "jasmine"]))
+        XCTAssertGreaterThan(profile.confidence, 0)
+        XCTAssertTrue(profile.isColdStart)
+    }
+
+    func testProfileLearnsFromExplicitFeedbackInsteadOfRawFrequency() {
+        let sweet = coffee(
+            id: "11111111-1111-4111-8111-111111111111",
+            type: .flatWhite,
+            profile: FlavorProfile(acidity: 0.3, body: 0.7, sweetness: 0.95, bitterness: 0.1),
+            rating: 5
+        )
+        let bitter = coffee(
+            id: "22222222-2222-4222-8222-222222222222",
+            type: .espresso,
+            profile: FlavorProfile(acidity: 0.4, body: 0.9, sweetness: 0.1, bitterness: 0.95),
+            rating: 1
+        )
+
+        let profile = engine.buildProfile(coffees: [sweet, bitter], signals: [])
+
+        XCTAssertGreaterThan(profile.sweetness, 0.8)
+        XCTAssertLessThan(profile.bitterness, 0.25)
+        XCTAssertEqual(profile.observationCount, 2)
+    }
+
+    func testNewFeedbackOutweighsStalePreferenceEvidence() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let stale = coffee(
+            id: "33333333-3333-4333-8333-333333333333",
+            type: .pourOver,
+            profile: FlavorProfile(acidity: 1, body: 0.1, sweetness: 0.5, bitterness: 0),
+            rating: 5,
+            date: now.addingTimeInterval(-365 * 86_400)
+        )
+        let recent = coffee(
+            id: "44444444-4444-4444-8444-444444444444",
+            type: .espresso,
+            profile: FlavorProfile(acidity: 0.1, body: 1, sweetness: 0.5, bitterness: 0.7),
+            rating: 5,
+            date: now
+        )
+
+        let profile = engine.buildProfile(coffees: [stale, recent], signals: [], now: now)
+
+        XCTAssertGreaterThan(profile.body, profile.acidity)
+    }
+
+    func testRecommendationsBalanceFitExplorationAndDiversity() {
+        let liked = coffee(
+            id: "55555555-5555-4555-8555-555555555555",
+            type: .flatWhite,
+            profile: FlavorProfile(acidity: 0.4, body: 0.8, sweetness: 0.85, bitterness: 0.2, flavorNotes: ["caramel", "almond"]),
+            rating: 5
+        )
+        let profile = engine.buildProfile(coffees: [liked], signals: [])
+
+        let recommendations = engine.recommendations(
+            profile: profile,
+            memories: [liked],
+            signals: [],
+            limit: 5
+        )
+
+        XCTAssertEqual(recommendations.count, 5)
+        XCTAssertGreaterThan(Set(recommendations.map { $0.candidate.coffeeType }).count, 2)
+        XCTAssertTrue(recommendations.contains(where: \.isExploration))
+        XCTAssertTrue(recommendations.allSatisfy { (0...1).contains($0.score) })
+    }
+
+    func testBoundedSlatePolicyIsReproducibleAndLogsExactConditionalProbabilities() throws {
+        let calibration = TasteCalibration(
+            acidity: 0.72,
+            body: 0.42,
+            sweetness: 0.76,
+            bitterness: 0.18,
+            adventure: 0.65,
+            flavorNotes: ["jasmine", "citrus"]
+        )
+        let profile = engine.buildProfile(coffees: [], signals: [], calibration: calibration)
+
+        let first = engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: [],
+            limit: 5,
+            samplingSeed: 42
+        )
+        let replay = engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: [],
+            limit: 5,
+            samplingSeed: 42
+        )
+
+        XCTAssertEqual(first.map(\.id), replay.map(\.id))
+        XCTAssertEqual(first.map(\.selectionProbability), replay.map(\.selectionProbability))
+        XCTAssertGreaterThan(first.map(\.selectionProbability).reduce(1, *), 0)
+
+        for recommendation in first {
+            let distribution = recommendation.policyActions
+            XCTAssertFalse(distribution.isEmpty)
+            XCTAssertEqual(distribution.map(\.probability).reduce(0, +), 1, accuracy: 0.000_000_1)
+            XCTAssertTrue(distribution.allSatisfy { $0.probability > 0 && $0.probability <= 1 })
+            let loggedChoice = try XCTUnwrap(distribution.first { $0.candidateID == recommendation.id })
+            XCTAssertEqual(loggedChoice.probability, recommendation.selectionProbability, accuracy: 0.000_000_1)
         }
     }
-    
-    // MARK: - Statistics Tests
-    
-    func testCoffeeStatistics() throws {
-        let stats = coffeeStore.getCoffeeStatistics()
-        
-        XCTAssertEqual(stats.totalCoffees, coffeeStore.coffees.count, "Total coffee count should match")
-        XCTAssertEqual(stats.favoritesCount, coffeeStore.favorites.count, "Favorites count should match")
-        XCTAssertGreaterThanOrEqual(stats.averageRating, 0.0, "Average rating should be non-negative")
-        XCTAssertLessThanOrEqual(stats.averageRating, 5.0, "Average rating should not exceed 5.0")
-        
-        // Test type distribution
-        let typeCounts = Dictionary(grouping: coffeeStore.coffees, by: { $0.coffeeType })
-            .mapValues { $0.count }
-        
-        for (type, count) in typeCounts {
-            XCTAssertEqual(stats.coffeeTypeDistribution[type], count, "Type distribution should match actual counts")
+
+    func testBoundedSlatePolicyExploresAcrossSeedsWithoutAbandoningUtility() throws {
+        let calibration = TasteCalibration(
+            acidity: 0.75,
+            body: 0.35,
+            sweetness: 0.7,
+            bitterness: 0.15,
+            adventure: 0.5,
+            flavorNotes: ["jasmine", "citrus"]
+        )
+        let profile = engine.buildProfile(coffees: [], signals: [], calibration: calibration)
+        let candidates = Array(CoffeeCatalog.candidates.prefix(3))
+        let scored = engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: [],
+            candidates: candidates,
+            limit: candidates.count,
+            samplingSeed: 0
+        )
+        let scoreByID = Dictionary(uniqueKeysWithValues: scored.map { ($0.id, $0.score) })
+        let bestID = try XCTUnwrap(scoreByID.max(by: { $0.value < $1.value })?.key)
+        let weakestID = try XCTUnwrap(scoreByID.min(by: { $0.value < $1.value })?.key)
+        var firstChoiceCounts: [UUID: Int] = [:]
+        var sampledUtility = 0.0
+
+        let sampleCount = 64
+        for seed in UInt64(0)..<UInt64(sampleCount) {
+            let choice = try XCTUnwrap(engine.recommendations(
+                profile: profile,
+                memories: [],
+                signals: [],
+                candidates: candidates,
+                limit: 1,
+                samplingSeed: seed
+            ).first)
+            firstChoiceCounts[choice.id, default: 0] += 1
+            sampledUtility += choice.score
         }
+
+        let uniformUtility = scoreByID.values.reduce(0, +) / Double(scoreByID.count)
+        XCTAssertEqual(firstChoiceCounts.count, candidates.count)
+        XCTAssertGreaterThan(firstChoiceCounts[bestID, default: 0], firstChoiceCounts[weakestID, default: 0])
+        XCTAssertGreaterThan(sampledUtility / Double(sampleCount), uniformUtility)
     }
-    
-    // MARK: - Vector Database Integration Tests
-    
-    func testVectorDatabaseIntegration() async throws {
-        let testCoffee = AnalyzedCoffee(
-            imageData: nil,
-            coffeeType: .pourOver,
-            confidence: 0.92,
-            roastLevel: .light,
-            notes: "Bright and fruity pour over",
-            flavorProfile: FlavorProfile(
-                acidity: 0.9,
+
+    func testPolicyDiagnosticsRequireAuditableExposureDistributions() throws {
+        let profile = engine.buildProfile(
+            coffees: [],
+            signals: [],
+            calibration: TasteCalibration(
+                acidity: 0.5,
                 body: 0.5,
-                sweetness: 0.6,
+                sweetness: 0.7,
                 bitterness: 0.2,
-                flavorNotes: ["citrus", "berry", "floral"]
-            ),
-            origin: "Ethiopia",
-            rating: 4.8
+                adventure: 0.7,
+                flavorNotes: ["caramel"]
+            )
         )
-        
-        // Add coffee and verify vector storage
-        await coffeeStore.addCoffee(testCoffee)
-        
-        // Test similarity search
-        let similarCoffees = await coffeeStore.searchSimilarCoffees(to: testCoffee, limit: 3)
-        
-        // Similar coffees should have compatible flavor profiles
-        for similarCoffee in similarCoffees {
-            // Check that similar coffees have somewhat similar characteristics
-            XCTAssertLessThanOrEqual(
-                abs(similarCoffee.flavorProfile.acidity - testCoffee.flavorProfile.acidity),
-                0.5,
-                "Similar coffees should have similar acidity levels"
+        let recommendations = engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: [],
+            limit: 3,
+            samplingSeed: 9
+        )
+        let sessionID = UUID()
+        let exposures = recommendations.enumerated().map { index, recommendation in
+            MemorySignal(
+                coffeeID: recommendation.id,
+                kind: .recommendationShown,
+                value: 1,
+                position: index + 1,
+                policyScore: recommendation.score,
+                policyProbability: recommendation.selectionProbability,
+                policyVersion: RecommendationPolicy.version,
+                catalogVersion: CoffeeCatalog.version,
+                policyActions: recommendation.policyActions,
+                sessionID: sessionID
             )
         }
+
+        let diagnostics = engine.policyDiagnostics(signals: exposures)
+
+        XCTAssertEqual(diagnostics.auditedSessions, 1)
+        XCTAssertEqual(diagnostics.loggedExposures, 3)
+        XCTAssertGreaterThan(diagnostics.meanNormalizedEntropy, 0)
+        XCTAssertLessThanOrEqual(diagnostics.meanNormalizedEntropy, 1)
+        XCTAssertGreaterThan(diagnostics.minimumPropensity, 0)
     }
-    
-    func testRecommendationEngine() async throws {
-        guard let firstCoffee = coffeeStore.coffees.first else {
-            XCTFail("No coffee available for testing recommendations")
-            return
+
+    func testCandidateSpecificSkipsReduceItsRankWithoutPenalizingTheSlate() throws {
+        let calibration = TasteCalibration(
+            acidity: 0.6,
+            body: 0.5,
+            sweetness: 0.7,
+            bitterness: 0.2,
+            adventure: 0.5,
+            flavorNotes: ["citrus"]
+        )
+        let profile = engine.buildProfile(coffees: [], signals: [], calibration: calibration)
+        let candidates = Array(CoffeeCatalog.candidates.prefix(2))
+        let target = try XCTUnwrap(candidates.first)
+        let baseline = engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: [],
+            candidates: candidates,
+            limit: candidates.count
+        )
+        let skips = (0..<4).map { offset in
+            MemorySignal(
+                coffeeID: target.id,
+                kind: .recommendationSkipped,
+                value: 0,
+                timestamp: Date().addingTimeInterval(Double(offset))
+            )
         }
-        
-        let recommendations = await coffeeStore.getRecommendationsFor(firstCoffee)
-        
-        XCTAssertLessThanOrEqual(recommendations.count, 3, "Should return at most 3 recommendations")
-        
-        // Recommendations should not include the original coffee
-        for recommendation in recommendations {
-            XCTAssertNotEqual(recommendation.id, firstCoffee.id, "Recommendations should not include the original coffee")
-        }
+        let learned = engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: skips,
+            candidates: candidates,
+            limit: candidates.count
+        )
+        let baselineTarget = try XCTUnwrap(baseline.first { $0.id == target.id })
+        let learnedTarget = try XCTUnwrap(learned.first { $0.id == target.id })
+        let untouched = try XCTUnwrap(candidates.dropFirst().first)
+        let learnedUntouched = try XCTUnwrap(learned.first { $0.id == untouched.id })
+
+        XCTAssertLessThan(learnedTarget.behaviorAffinity, baselineTarget.behaviorAffinity)
+        XCTAssertLessThan(learnedTarget.score, baselineTarget.score)
+        XCTAssertGreaterThan(learnedUntouched.behaviorAffinity, learnedTarget.behaviorAffinity)
     }
-    
-    // MARK: - Data Persistence Tests
-    
-    func testFavoritesPersistence() throws {
-        guard let firstCoffee = coffeeStore.coffees.first else {
-            XCTFail("No coffee available for testing persistence")
-            return
-        }
-        
-        let coffeeId = firstCoffee.id
-        
-        // Add to favorites
-        coffeeStore.toggleFavorite(coffeeId)
-        XCTAssertTrue(coffeeStore.isFavorite(coffeeId), "Coffee should be favorited")
-        
-        // Verify persistence by checking UserDefaults
-        let savedFavorites = UserDefaults.standard.stringArray(forKey: "favorite_coffees") ?? []
-        XCTAssertTrue(savedFavorites.contains(coffeeId.uuidString), "Favorite should be persisted to UserDefaults")
-        
-        // Remove from favorites
-        coffeeStore.toggleFavorite(coffeeId)
-        XCTAssertFalse(coffeeStore.isFavorite(coffeeId), "Coffee should not be favorited")
-        
-        let updatedFavorites = UserDefaults.standard.stringArray(forKey: "favorite_coffees") ?? []
-        XCTAssertFalse(updatedFavorites.contains(coffeeId.uuidString), "Favorite removal should be persisted")
-    }
-    
-    // MARK: - Performance Tests
-    
-    func testSearchPerformance() throws {
-        // Add multiple coffees for performance testing
-        let testCoffees = (0..<100).map { index in
+
+    func testObservedPredictionErrorsCalibrateFutureVectorMatches() throws {
+        let target = try XCTUnwrap(CoffeeCatalog.candidates.first)
+        let calibration = TasteCalibration(
+            acidity: 0.2,
+            body: 0.85,
+            sweetness: 0.45,
+            bitterness: 0.55,
+            adventure: 0.5,
+            flavorNotes: []
+        )
+        let profile = engine.buildProfile(coffees: [], signals: [], calibration: calibration)
+        let baseline = try XCTUnwrap(engine.recommendations(
+            profile: profile,
+            memories: [],
+            signals: [],
+            candidates: [target],
+            limit: 1
+        ).first)
+        let observations = (0..<5).map { offset in
             AnalyzedCoffee(
                 imageData: nil,
-                coffeeType: CoffeeType.allCases.randomElement() ?? .espresso,
-                confidence: Double.random(in: 0.7...0.99),
-                notes: "Performance test coffee \(index)",
+                coffeeType: target.coffeeType,
+                confidence: 1,
+                analysisDate: Date().addingTimeInterval(Double(-offset)),
+                brewMethod: target.brewMethod,
+                roastLevel: target.roastLevel,
                 flavorProfile: FlavorProfile(
-                    acidity: Double.random(in: 0...1),
-                    body: Double.random(in: 0...1),
-                    sweetness: Double.random(in: 0...1),
-                    bitterness: Double.random(in: 0...1)
+                    acidity: 0.2,
+                    body: 0.85,
+                    sweetness: 0.45,
+                    bitterness: 0.55
                 ),
-                rating: Double.random(in: 3...5)
+                origin: target.origin,
+                rating: 4,
+                sourceCandidateID: target.id
             )
         }
-        
-        Task {
-            for coffee in testCoffees {
-                await coffeeStore.addCoffee(coffee)
-            }
-        }
-        
-        // Measure search performance
-        coffeeStore.searchText = "test"
-        
-        let startTime = CFAbsoluteTimeGetCurrent()
-        let _ = coffeeStore.filteredCoffees
-        let searchTime = CFAbsoluteTimeGetCurrent() - startTime
-        
-        XCTAssertLessThan(searchTime, 0.1, "Search should complete in less than 100ms")
+        let calibrated = try XCTUnwrap(engine.recommendations(
+            profile: profile,
+            memories: observations,
+            signals: [],
+            candidates: [target],
+            limit: 1
+        ).first)
+
+        XCTAssertGreaterThan(calibrated.match, baseline.match)
     }
-    
-    // MARK: - Edge Cases Tests
-    
-    func testEmptyStateHandling() throws {
-        // Create a new store with no data
-        let emptyStore = CoffeeStore()
-        emptyStore.coffees = []
-        
-        XCTAssertEqual(emptyStore.filteredCoffees.count, 0, "Empty store should have no filtered results")
-        XCTAssertEqual(emptyStore.favoriteCoffees.count, 0, "Empty store should have no favorites")
-        
-        let stats = emptyStore.getCoffeeStatistics()
-        XCTAssertEqual(stats.totalCoffees, 0, "Empty store should report zero total coffees")
-        XCTAssertEqual(stats.averageRating, 0.0, "Empty store should have zero average rating")
-    }
-    
-    func testInvalidDataHandling() throws {
-        let invalidCoffee = AnalyzedCoffee(
-            imageData: nil,
-            coffeeType: .unknown,
-            confidence: -1.0, // Invalid confidence
-            notes: "",
-            flavorProfile: FlavorProfile(
-                acidity: 2.0, // Out of range
-                body: -0.5,   // Out of range
-                sweetness: 1.5, // Out of range
-                bitterness: -1.0 // Out of range
+
+    func testNewReviewCardsUseStagedRetrievalInsteadOfImmediateQuizzing() throws {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let tasted = coffee(
+            id: "66666666-6666-4666-8666-666666666666",
+            type: .pourOver,
+            profile: FlavorProfile(
+                acidity: 0.8,
+                body: 0.4,
+                sweetness: 0.7,
+                bitterness: 0.1,
+                flavorNotes: ["jasmine"]
             ),
-            rating: 10.0 // Out of range
+            rating: 4,
+            date: now
         )
-        
-        Task {
-            await coffeeStore.addCoffee(invalidCoffee)
+
+        let cards = engine.reviewCards(for: tasted, now: now)
+        let dueByConcept = Dictionary(uniqueKeysWithValues: cards.map { ($0.concept, $0.dueAt) })
+
+        XCTAssertTrue(engine.interleavedDueCards(cards, now: now).isEmpty)
+        XCTAssertEqual(try XCTUnwrap(dueByConcept[.flavor]).timeIntervalSince(now), 20 * 60, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(dueByConcept[.brew]).timeIntervalSince(now), 86_400, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(dueByConcept[.origin]).timeIntervalSince(now), 2 * 86_400, accuracy: 1)
+        XCTAssertEqual(try XCTUnwrap(dueByConcept[.roast]).timeIntervalSince(now), 3 * 86_400, accuracy: 1)
+    }
+
+    func testAdaptiveReviewUsesRecallGradeAndSpacing() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let card = ReviewCard(
+            coffeeID: UUID(),
+            concept: .origin,
+            prompt: "Origin?",
+            answer: "Ethiopia",
+            dueAt: now
+        )
+
+        let again = engine.applyReview(.again, to: card, now: now)
+        let good = engine.applyReview(.good, to: card, now: now)
+        let easy = engine.applyReview(.easy, to: card, now: now)
+
+        XCTAssertEqual(again.dueAt.timeIntervalSince(now), 600, accuracy: 1)
+        XCTAssertGreaterThan(good.dueAt, again.dueAt)
+        XCTAssertGreaterThan(easy.dueAt, good.dueAt)
+        XCTAssertGreaterThan(easy.stability, good.stability)
+    }
+
+    func testDueCardsAreInterleavedAcrossConcepts() {
+        let now = Date()
+        let coffeeID = UUID()
+        let cards = [
+            ReviewCard(coffeeID: coffeeID, concept: .flavor, prompt: "1", answer: "1", dueAt: now),
+            ReviewCard(coffeeID: coffeeID, concept: .flavor, prompt: "2", answer: "2", dueAt: now),
+            ReviewCard(coffeeID: coffeeID, concept: .origin, prompt: "3", answer: "3", dueAt: now),
+            ReviewCard(coffeeID: coffeeID, concept: .brew, prompt: "4", answer: "4", dueAt: now)
+        ]
+
+        let ordered = engine.interleavedDueCards(cards, now: now)
+
+        XCTAssertEqual(ordered.count, cards.count)
+        for pair in zip(ordered, ordered.dropFirst()) {
+            XCTAssertNotEqual(pair.0.concept, pair.1.concept)
         }
-        
-        // App should handle invalid data gracefully
-        XCTAssertNoThrow(coffeeStore.filteredCoffees, "App should handle invalid data gracefully")
-        XCTAssertNoThrow(coffeeStore.getCoffeeStatistics(), "Statistics should handle invalid data gracefully")
+    }
+
+    private func coffee(
+        id: String,
+        type: CoffeeType,
+        profile: FlavorProfile,
+        rating: Double,
+        date: Date = Date()
+    ) -> AnalyzedCoffee {
+        AnalyzedCoffee(
+            id: UUID(uuidString: id)!,
+            imageData: nil,
+            coffeeType: type,
+            confidence: 1,
+            analysisDate: date,
+            brewMethod: "Test brew",
+            roastLevel: .medium,
+            flavorProfile: profile,
+            origin: "Test origin",
+            rating: rating
+        )
     }
 }

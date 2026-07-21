@@ -1,39 +1,60 @@
 import Foundation
-import SwiftUI
 
 // MARK: - Analyzed Coffee
-struct AnalyzedCoffee: Identifiable, Codable {
+struct AnalyzedCoffee: Identifiable, Codable, Equatable, Sendable {
     let id: UUID
-    let imageData: Data?
-    let coffeeType: CoffeeType
-    let confidence: Double
+    var imageData: Data?
+    var coffeeType: CoffeeType
+    var confidence: Double
     let analysisDate: Date
-    let brewMethod: String?
-    let roastLevel: RoastLevel
-    let notes: String
-    let recommendations: [String]
-    let flavorProfile: FlavorProfile
-    let origin: String?
-    let rating: Double?
+    var brewMethod: String?
+    var roastLevel: RoastLevel
+    var notes: String
+    var recommendations: [String]
+    var flavorProfile: FlavorProfile
+    var origin: String?
+    var rating: Double?
+    var sourceCandidateID: UUID?
     
-    init(imageData: Data?, coffeeType: CoffeeType, confidence: Double, brewMethod: String? = nil, roastLevel: RoastLevel = .medium, notes: String = "", recommendations: [String] = [], flavorProfile: FlavorProfile = FlavorProfile(), origin: String? = nil, rating: Double? = nil) {
-        self.id = UUID()
+    init(
+        id: UUID = UUID(),
+        imageData: Data?,
+        coffeeType: CoffeeType,
+        confidence: Double,
+        analysisDate: Date = Date(),
+        brewMethod: String? = nil,
+        roastLevel: RoastLevel = .medium,
+        notes: String = "",
+        recommendations: [String] = [],
+        flavorProfile: FlavorProfile = FlavorProfile(),
+        origin: String? = nil,
+        rating: Double? = nil,
+        sourceCandidateID: UUID? = nil
+    ) {
+        self.id = id
         self.imageData = imageData
         self.coffeeType = coffeeType
-        self.confidence = confidence
-        self.analysisDate = Date()
+        self.confidence = confidence.clamped(to: 0...1)
+        self.analysisDate = analysisDate
         self.brewMethod = brewMethod
         self.roastLevel = roastLevel
         self.notes = notes
         self.recommendations = recommendations
         self.flavorProfile = flavorProfile
         self.origin = origin
-        self.rating = rating
+        self.rating = rating.map { $0.clamped(to: 0...5) }
+        self.sourceCandidateID = sourceCandidateID
+    }
+}
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }
 
 // MARK: - Coffee Type
-enum CoffeeType: String, CaseIterable, Codable {
+enum CoffeeType: String, CaseIterable, Codable, Sendable {
     case espresso = "Espresso"
     case cappuccino = "Cappuccino"
     case latte = "Latte"
@@ -131,7 +152,7 @@ enum CoffeeType: String, CaseIterable, Codable {
 }
 
 // MARK: - Roast Level
-enum RoastLevel: String, CaseIterable, Codable {
+enum RoastLevel: String, CaseIterable, Codable, Sendable {
     case light = "Light Roast"
     case mediumLight = "Medium-Light Roast"
     case medium = "Medium Roast"
@@ -169,7 +190,7 @@ enum RoastLevel: String, CaseIterable, Codable {
 }
 
 // MARK: - Coffee Strength
-enum CoffeeStrength: String, CaseIterable, Codable {
+enum CoffeeStrength: String, CaseIterable, Codable, Sendable {
     case mild = "Mild"
     case medium = "Medium"
     case strong = "Strong"
@@ -195,7 +216,7 @@ enum CoffeeStrength: String, CaseIterable, Codable {
 }
 
 // MARK: - Flavor Profile
-struct FlavorProfile: Codable {
+struct FlavorProfile: Codable, Equatable, Sendable {
     var acidity: Double = 0.5
     var body: Double = 0.5
     var sweetness: Double = 0.5
@@ -203,16 +224,17 @@ struct FlavorProfile: Codable {
     var flavorNotes: [String] = []
     
     init(acidity: Double = 0.5, body: Double = 0.5, sweetness: Double = 0.5, bitterness: Double = 0.5, flavorNotes: [String] = []) {
-        self.acidity = acidity
-        self.body = body
-        self.sweetness = sweetness
-        self.bitterness = bitterness
+        self.acidity = acidity.clamped(to: 0...1)
+        self.body = body.clamped(to: 0...1)
+        self.sweetness = sweetness.clamped(to: 0...1)
+        self.bitterness = bitterness.clamped(to: 0...1)
         self.flavorNotes = flavorNotes
     }
 }
 
 // MARK: - Coffee Facts
-struct CoffeeFact {
+struct CoffeeFact: Identifiable, Sendable {
+    var id: String { title }
     let title: String
     let description: String
     let category: FactCategory

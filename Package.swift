@@ -6,28 +6,46 @@ import PackageDescription
 let package = Package(
     name: "CoffeeSnapAI",
     platforms: [
-        .iOS(.v17)
+        .iOS(.v17),
+        .macOS(.v14)
     ],
     products: [
-        .executable(name: "CoffeeSnapAI", targets: ["CoffeeSnapAI"])
-    ],
-    dependencies: [
-        .package(url: "https://github.com/stephencelis/SQLite.swift.git", from: "0.14.1"),
-        .package(url: "https://github.com/apple/swift-algorithms", from: "1.0.0")
+        .library(name: "CoffeeSnapAI", targets: ["CoffeeSnapAI"])
     ],
     targets: [
-        .executableTarget(
+        .target(
             name: "CoffeeSnapAI",
-            dependencies: [
-                .product(name: "SQLite", package: "SQLite.swift"),
-                .product(name: "Algorithms", package: "swift-algorithms")
+            path: "CoffeeSnapAI",
+            exclude: [
+                "Assets.xcassets",
+                "CoffeeSnapAIApp.swift",
+                "ContentView.swift",
+                "Info.plist",
+                "Preview Content",
+                "Services/CameraService.swift",
+                "Services/MLService.swift",
+                "Utils",
+                "Views"
             ],
-            path: "CoffeeSnapAI"
+            sources: [
+                "Models/CoffeeModel.swift",
+                "Models/TasteMemoryModel.swift",
+                "Services/CoffeeEmbeddingService.swift",
+                "Services/TasteMemoryEngine.swift",
+                "Services/VisualEmbeddingService.swift",
+                "Services/VectorDatabaseService.swift",
+                "ViewModels/CoffeeStore.swift"
+            ],
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .testTarget(
             name: "CoffeeSnapAITests",
             dependencies: ["CoffeeSnapAI"],
-            path: "Tests"
+            path: "Tests",
+            sources: [
+                "CoffeeSnapAITests/Integration/CoffeeStoreIntegrationTests.swift",
+                "CoffeeSnapAITests/Integration/VectorDatabaseIntegrationTests.swift"
+            ]
         )
     ]
 )

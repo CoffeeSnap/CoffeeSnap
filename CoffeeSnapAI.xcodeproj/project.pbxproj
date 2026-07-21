@@ -10,6 +10,14 @@
 		001 /* CoffeeSnapAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 002; };
 		003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004; };
 		005 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 006; };
+		101 /* CoffeeModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 102; };
+		103 /* TasteMemoryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 104; };
+		105 /* CoffeeEmbeddingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 106; };
+		107 /* TasteMemoryEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 108; };
+		109 /* VectorDatabaseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110; };
+		111 /* CoffeeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 112; };
+		113 /* MemoryExperienceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114; };
+		115 /* VisualEmbeddingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 116; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,6 +26,14 @@
 		004 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		102 /* CoffeeModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/CoffeeModel.swift; sourceTree = "<group>"; };
+		104 /* TasteMemoryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models/TasteMemoryModel.swift; sourceTree = "<group>"; };
+		106 /* CoffeeEmbeddingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/CoffeeEmbeddingService.swift; sourceTree = "<group>"; };
+		108 /* TasteMemoryEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/TasteMemoryEngine.swift; sourceTree = "<group>"; };
+		110 /* VectorDatabaseService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/VectorDatabaseService.swift; sourceTree = "<group>"; };
+		112 /* CoffeeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewModels/CoffeeStore.swift; sourceTree = "<group>"; };
+		114 /* MemoryExperienceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views/MemoryExperienceView.swift; sourceTree = "<group>"; };
+		116 /* VisualEmbeddingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Services/VisualEmbeddingService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +68,14 @@
 			children = (
 				002 /* CoffeeSnapAIApp.swift */,
 				004 /* ContentView.swift */,
+				102 /* CoffeeModel.swift */,
+				104 /* TasteMemoryModel.swift */,
+				106 /* CoffeeEmbeddingService.swift */,
+				108 /* TasteMemoryEngine.swift */,
+				116 /* VisualEmbeddingService.swift */,
+				110 /* VectorDatabaseService.swift */,
+				112 /* CoffeeStore.swift */,
+				114 /* MemoryExperienceView.swift */,
 				006 /* Assets.xcassets */,
 				008 /* Info.plist */,
 			);
@@ -129,6 +153,14 @@
 			files = (
 				003 /* ContentView.swift in Sources */,
 				001 /* CoffeeSnapAIApp.swift in Sources */,
+				101 /* CoffeeModel.swift in Sources */,
+				103 /* TasteMemoryModel.swift in Sources */,
+				105 /* CoffeeEmbeddingService.swift in Sources */,
+				107 /* TasteMemoryEngine.swift in Sources */,
+				109 /* VectorDatabaseService.swift in Sources */,
+				111 /* CoffeeStore.swift in Sources */,
+				113 /* MemoryExperienceView.swift in Sources */,
+				115 /* VisualEmbeddingService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -279,6 +311,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.coffeeapp.coffeesnapai;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -315,6 +348,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lsqlite3";
 				PRODUCT_BUNDLE_IDENTIFIER = com.coffeeapp.coffeesnapai;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

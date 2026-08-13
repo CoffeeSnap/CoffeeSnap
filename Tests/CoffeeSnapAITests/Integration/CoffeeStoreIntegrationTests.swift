@@ -32,6 +32,14 @@ final class TasteMemoryEngineTests: XCTestCase {
         XCTAssertTrue(profile.isColdStart)
     }
 
+    func testFlavorNotesAreTrimmedAndDeduplicatedWithoutLosingDisplayText() {
+        let profile = FlavorProfile(
+            flavorNotes: ["  Dark Chocolate ", "dark chocolate", "", "Café", "cafe"]
+        )
+
+        XCTAssertEqual(profile.flavorNotes, ["Dark Chocolate", "Café"])
+    }
+
     func testProfileLearnsFromExplicitFeedbackInsteadOfRawFrequency() {
         let sweet = coffee(
             id: "11111111-1111-4111-8111-111111111111",

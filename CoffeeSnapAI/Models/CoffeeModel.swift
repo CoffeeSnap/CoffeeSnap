@@ -228,7 +228,16 @@ struct FlavorProfile: Codable, Equatable, Sendable {
         self.body = body.clamped(to: 0...1)
         self.sweetness = sweetness.clamped(to: 0...1)
         self.bitterness = bitterness.clamped(to: 0...1)
-        self.flavorNotes = flavorNotes
+        var seen: Set<String> = []
+        self.flavorNotes = flavorNotes.compactMap { note in
+            let cleaned = note.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return nil }
+            let key = cleaned
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                .lowercased()
+            guard seen.insert(key).inserted else { return nil }
+            return cleaned
+        }
     }
 }
 

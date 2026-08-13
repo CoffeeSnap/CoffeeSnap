@@ -1,6 +1,8 @@
+import ImageIO
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct MemoryHomeView: View {
     @EnvironmentObject private var store: CoffeeStore
@@ -122,7 +124,7 @@ struct MemoryHomeView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 4)
-                    Text("\(Int(recommendation.match * 100))")
+                    Text("\(Int(recommendation.match * 100))%")
                         .font(.title2.monospacedDigit().bold())
                         .foregroundStyle(CoffeeTheme.caramel)
                 }
@@ -164,7 +166,11 @@ struct DiscoverView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                     ForEach(Array(store.dashboard.recommendations.enumerated()), id: \.element.id) { index, recommendation in
-                        RecommendationCard(recommendation: recommendation, rank: index + 1) {
+                        RecommendationCard(
+                            recommendation: recommendation,
+                            rank: index + 1,
+                            isDisabled: store.isExposingRecommendations || store.busyRecommendationIDs.contains(recommendation.id)
+                        ) {
                             Task { await store.recordRecommendation(recommendation, opened: true) }
                             loggingCandidate = recommendation.candidate
                         } onSkip: {
@@ -253,12 +259,16 @@ struct LearningLabView: View {
                 Text("How effortful was that recall?")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    ForEach(ReviewGrade.allCases, id: \.self) { grade in
-                        Button(grade.title) {
-                            Task { await store.gradeNextReview(grade) }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(ReviewGrade.allCases, id: \.self) { grade in
+                            gradeButton(grade)
                         }
-                        .buttonStyle(GradeButtonStyle(grade: grade))
+                    }
+                    VStack(spacing: 8) {
+                        ForEach(ReviewGrade.allCases, id: \.self) { grade in
+                            gradeButton(grade)
+                        }
                     }
                 }
             } else {
@@ -276,6 +286,14 @@ struct LearningLabView: View {
         }
         .padding(22)
         .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 26))
+    }
+
+    private func gradeButton(_ grade: ReviewGrade) -> some View {
+        Button(grade.title) {
+            Task { await store.gradeNextReview(grade) }
+        }
+        .buttonStyle(GradeButtonStyle(grade: grade))
+        .disabled(store.isGradingReview)
     }
 
     private var completedState: some View {
@@ -312,11 +330,12 @@ struct CoffeeJournalView: View {
     @EnvironmentObject private var store: CoffeeStore
     @State private var showingLog = false
     @State private var visualQuery: AnalyzedCoffee?
+    @State private var coffeePendingDeletion: AnalyzedCoffee?
 
     var body: some View {
         NavigationStack {
             List {
-                if store.filteredCoffees.isEmpty {
+                if store.coffees.isEmpty {
                     ContentUnavailableView {
                         Label("Your journal is empty", systemImage: "cup.and.saucer")
                     } description: {
@@ -328,6 +347,10 @@ struct CoffeeJournalView: View {
                     }
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
+                } else if store.filteredCoffees.isEmpty {
+                    ContentUnavailableView.search(text: store.searchText)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                 } else {
                     ForEach(store.filteredCoffees) { coffee in
                         JournalRow(
@@ -340,7 +363,7 @@ struct CoffeeJournalView: View {
                             .listRowSeparator(.hidden)
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
-                                    Task { await store.delete(coffee.id) }
+                                    coffeePendingDeletion = coffee
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
@@ -360,6 +383,21 @@ struct CoffeeJournalView: View {
             .sheet(isPresented: $showingLog) { LogTastingView() }
             .sheet(item: $visualQuery) { coffee in
                 VisualSimilarityView(query: coffee)
+            }
+            .confirmationDialog(
+                "Delete this taste memory?",
+                isPresented: Binding(
+                    get: { coffeePendingDeletion != nil },
+                    set: { if !$0 { coffeePendingDeletion = nil } }
+                ),
+                presenting: coffeePendingDeletion
+            ) { coffee in
+                Button("Delete memory", role: .destructive) {
+                    Task { await store.delete(coffee.id) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { coffee in
+                Text("This permanently removes the \(coffee.coffeeType.rawValue.lowercased()) tasting and its recall cards.")
             }
         }
     }
@@ -392,10 +430,13 @@ private struct JournalRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(coffee.coffeeType.rawValue)
                     .font(.headline)
-                Text([coffee.origin, coffee.brewMethod].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                let metadata = [coffee.origin, coffee.brewMethod].compactMap { $0 }.joined(separator: " · ")
+                if !metadata.isEmpty {
+                    Text(metadata)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 3) {
                     ForEach(1...5, id: \.self) { star in
                         Button {
@@ -406,6 +447,9 @@ private struct JournalRow: View {
                                 .foregroundStyle(star <= Int(coffee.rating ?? 0) ? CoffeeTheme.caramel : Color.secondary.opacity(0.45))
                         }
                         .buttonStyle(.plain)
+                        .disabled(store.busyCoffeeIDs.contains(coffee.id))
+                        .accessibilityLabel("Rate \(star) out of 5")
+                        .accessibilityAddTraits(star == Int(coffee.rating ?? 0) ? .isSelected : [])
                     }
                 }
             }
@@ -417,6 +461,8 @@ private struct JournalRow: View {
                     .foregroundStyle(store.favorites.contains(coffee.id) ? .red : .secondary)
             }
             .buttonStyle(.plain)
+            .disabled(store.busyCoffeeIDs.contains(coffee.id))
+            .accessibilityLabel(store.favorites.contains(coffee.id) ? "Remove from favorites" : "Add to favorites")
         }
         .padding(14)
         .background(CoffeeTheme.card, in: RoundedRectangle(cornerRadius: 18))
@@ -470,9 +516,14 @@ private struct VisualSimilarityView: View {
                                 }
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(result.coffee.coffeeType.rawValue).font(.headline)
-                                    Text([result.coffee.origin, result.coffee.brewMethod].compactMap { $0 }.joined(separator: " · "))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                    let metadata = [result.coffee.origin, result.coffee.brewMethod]
+                                        .compactMap { $0 }
+                                        .joined(separator: " · ")
+                                    if !metadata.isEmpty {
+                                        Text(metadata)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                                 Spacer()
                                 Text("\(Int(result.similarity * 100))")
@@ -500,6 +551,7 @@ struct LogTastingView: View {
     @EnvironmentObject private var store: CoffeeStore
     @Environment(\.dismiss) private var dismiss
     private let sourceCandidateID: UUID?
+    @State private var tastingID = UUID()
 
     @State private var type: CoffeeType
     @State private var roast: RoastLevel
@@ -517,6 +569,9 @@ struct LogTastingView: View {
     @State private var showingCamera = false
     @State private var isLoadingPhoto = false
     @State private var photoError: String?
+    @State private var isSaving = false
+    @State private var photoLoadTask: Task<Void, Never>?
+    @State private var photoLoadID = UUID()
 
     init(candidate: CoffeeCandidate? = nil) {
         sourceCandidateID = candidate?.id
@@ -548,13 +603,14 @@ struct LogTastingView: View {
                         PhotosPicker(selection: $selectedPhoto, matching: .images) {
                             Label(imageData == nil ? "Choose photo" : "Replace photo", systemImage: "photo.on.rectangle")
                         }
+                        .disabled(isSaving || isLoadingPhoto)
                         Spacer()
                         Button {
                             showingCamera = true
                         } label: {
                             Label("Take photo", systemImage: "camera.fill")
                         }
-                        .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                        .disabled(isSaving || isLoadingPhoto || !UIImagePickerController.isSourceTypeAvailable(.camera))
                     }
 
                     if isLoadingPhoto {
@@ -570,11 +626,12 @@ struct LogTastingView: View {
                             imageData = nil
                             selectedPhoto = nil
                         }
+                        .disabled(isSaving)
                     }
                 } header: {
                     Text("Visual memory · optional")
                 } footer: {
-                    Text("The photo is encoded on-device for private visual similarity. CoffeeSnap does not invent flavor or origin from appearance.")
+                    Text("The photo is resized, stripped of metadata, and encoded on-device for private visual similarity. CoffeeSnap does not invent flavor or origin from appearance.")
                 }
 
                 Section("Cup") {
@@ -621,64 +678,91 @@ struct LogTastingView: View {
             .navigationTitle(sourceCandidateID == nil ? "Log a tasting" : "Try this cup")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isSaving)
+                }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Remember") {
-                        let coffee = AnalyzedCoffee(
-                            id: UUID(),
-                            imageData: imageData,
-                            coffeeType: type,
-                            confidence: 1,
-                            brewMethod: brewMethod.nilIfBlank,
-                            roastLevel: roast,
-                            notes: notes,
-                            recommendations: [],
-                            flavorProfile: FlavorProfile(
-                                acidity: acidity,
-                                body: bodyValue,
-                                sweetness: sweetness,
-                                bitterness: bitterness,
-                                flavorNotes: flavorNotes.split(separator: ",").map {
-                                    $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                                }.filter { !$0.isEmpty }
-                            ),
-                            origin: origin.nilIfBlank,
-                            rating: rating,
-                            sourceCandidateID: sourceCandidateID
-                        )
-                        Task {
-                            await store.addCoffee(coffee)
-                            dismiss()
+                    Button(action: remember) {
+                        if isSaving {
+                            ProgressView()
+                        } else {
+                            Text("Remember")
                         }
                     }
                     .fontWeight(.semibold)
+                    .disabled(isSaving || isLoadingPhoto)
                 }
             }
             .onChange(of: selectedPhoto) { _, item in
+                photoLoadTask?.cancel()
+                let loadID = UUID()
+                photoLoadID = loadID
                 guard let item else { return }
-                Task { await loadPhoto(item) }
+                photoLoadTask = Task { await loadPhoto(item, loadID: loadID) }
             }
+            .onDisappear { photoLoadTask?.cancel() }
             .sheet(isPresented: $showingCamera) {
-                CoffeeCameraCapture(imageData: $imageData)
+                CoffeeCameraCapture(imageData: $imageData, isProcessing: $isLoadingPhoto)
                     .ignoresSafeArea()
             }
         }
     }
 
     @MainActor
-    private func loadPhoto(_ item: PhotosPickerItem) async {
+    private func loadPhoto(_ item: PhotosPickerItem, loadID: UUID) async {
         isLoadingPhoto = true
         photoError = nil
-        defer { isLoadingPhoto = false }
+        defer {
+            if photoLoadID == loadID { isLoadingPhoto = false }
+        }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self),
-                  let normalized = normalizedCoffeePhotoData(data) else {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                photoError = "That image could not be loaded."
+                return
+            }
+            let normalized = await Task.detached(priority: .userInitiated) {
+                normalizedCoffeePhotoData(data)
+            }.value
+            guard !Task.isCancelled, photoLoadID == loadID else { return }
+            guard let normalized else {
                 photoError = "That image format could not be prepared."
                 return
             }
             imageData = normalized
         } catch {
+            guard !Task.isCancelled, photoLoadID == loadID else { return }
             photoError = error.localizedDescription
+        }
+    }
+
+    private func remember() {
+        guard !isSaving, !isLoadingPhoto else { return }
+        isSaving = true
+        let coffee = AnalyzedCoffee(
+            id: tastingID,
+            imageData: imageData,
+            coffeeType: type,
+            confidence: 1,
+            brewMethod: brewMethod.nilIfBlank,
+            roastLevel: roast,
+            notes: notes.trimmingCharacters(in: .whitespacesAndNewlines),
+            recommendations: [],
+            flavorProfile: FlavorProfile(
+                acidity: acidity,
+                body: bodyValue,
+                sweetness: sweetness,
+                bitterness: bitterness,
+                flavorNotes: flavorNotes.split(separator: ",").map(String.init)
+            ),
+            origin: origin.nilIfBlank,
+            rating: rating,
+            sourceCandidateID: sourceCandidateID
+        )
+        Task {
+            let didSave = await store.addCoffee(coffee)
+            isSaving = false
+            if didSave { dismiss() }
         }
     }
 }
@@ -692,6 +776,7 @@ struct TasteCalibrationView: View {
     @State private var textureDirection: CalibrationTexture?
     @State private var discoveryDirection: CalibrationDiscovery?
     @State private var selectedNotes: Set<String> = []
+    @State private var isSaving = false
 
     private let noteOptions = ["Caramel", "Chocolate", "Nuts", "Citrus", "Berries", "Floral"]
 
@@ -781,14 +866,17 @@ struct TasteCalibrationView: View {
                     Button {
                         save()
                     } label: {
-                        Text(isOnboarding ? "Build my private taste model" : "Update taste model")
-                            .fontWeight(.semibold)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                        HStack {
+                            if isSaving { ProgressView() }
+                            Text(isOnboarding ? "Build my private taste model" : "Update taste model")
+                                .fontWeight(.semibold)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(CoffeeTheme.roast)
-                    .disabled(!isComplete)
+                    .disabled(!isComplete || isSaving)
                 }
                 .padding(20)
             }
@@ -797,6 +885,7 @@ struct TasteCalibrationView: View {
                 if !isOnboarding {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { dismiss() }
+                            .disabled(isSaving)
                     }
                 }
             }
@@ -808,7 +897,11 @@ struct TasteCalibrationView: View {
     }
 
     private func save() {
-        guard let flavorDirection, let textureDirection, let discoveryDirection else { return }
+        guard !isSaving,
+              let flavorDirection,
+              let textureDirection,
+              let discoveryDirection else { return }
+        isSaving = true
         let deep = flavorDirection == .deep
         let creamy = textureDirection == .creamy
         var notes = selectedNotes.map { $0.lowercased() }
@@ -824,8 +917,9 @@ struct TasteCalibrationView: View {
             flavorNotes: notes
         )
         Task {
-            await store.saveCalibration(calibration)
-            dismiss()
+            let didSave = await store.saveCalibration(calibration)
+            isSaving = false
+            if didSave { dismiss() }
         }
     }
 }
@@ -843,7 +937,10 @@ private struct CalibrationQuestion<Content: View>: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(title, systemImage: symbol)
                 .font(.headline)
-            HStack(spacing: 10) { content }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { content }
+                VStack(spacing: 10) { content }
+            }
         }
     }
 }
@@ -934,6 +1031,7 @@ struct MemoryArchitectureView: View {
 private struct RecommendationCard: View {
     let recommendation: MemoryRecommendation
     let rank: Int
+    let isDisabled: Bool
     let onTry: () -> Void
     let onSkip: () -> Void
 
@@ -985,6 +1083,8 @@ private struct RecommendationCard: View {
         }
         .padding(18)
         .background(CoffeeTheme.card, in: RoundedRectangle(cornerRadius: 22))
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.65 : 1)
     }
 }
 
@@ -1099,7 +1199,7 @@ private struct CoffeeMemoryThumbnail: View {
 
     var body: some View {
         Group {
-            if let image = UIImage(data: imageData) {
+            if let image = CoffeeImageCache.shared.image(for: imageData) {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
@@ -1119,9 +1219,10 @@ private struct CoffeeMemoryThumbnail: View {
 
 private struct CoffeeCameraCapture: UIViewControllerRepresentable {
     @Binding var imageData: Data?
+    @Binding var isProcessing: Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(imageData: $imageData)
+        Coordinator(imageData: $imageData, isProcessing: $isProcessing)
     }
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
@@ -1136,20 +1237,28 @@ private struct CoffeeCameraCapture: UIViewControllerRepresentable {
 
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         private let imageData: Binding<Data?>
+        private let isProcessing: Binding<Bool>
 
-        init(imageData: Binding<Data?>) {
+        init(imageData: Binding<Data?>, isProcessing: Binding<Bool>) {
             self.imageData = imageData
+            self.isProcessing = isProcessing
         }
 
         func imagePickerController(
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let image = info[.originalImage] as? UIImage,
-               let data = image.jpegData(compressionQuality: 0.82) {
-                imageData.wrappedValue = normalizedCoffeePhotoData(data)
-            }
             picker.dismiss(animated: true)
+            guard let image = info[.originalImage] as? UIImage,
+                  let data = image.jpegData(compressionQuality: 0.9) else { return }
+            isProcessing.wrappedValue = true
+            Task {
+                let normalized = await Task.detached(priority: .userInitiated) {
+                    normalizedCoffeePhotoData(data)
+                }.value
+                imageData.wrappedValue = normalized
+                isProcessing.wrappedValue = false
+            }
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
@@ -1158,26 +1267,50 @@ private struct CoffeeCameraCapture: UIViewControllerRepresentable {
     }
 }
 
-private func normalizedCoffeePhotoData(_ data: Data) -> Data? {
-    guard let image = UIImage(data: data) else { return nil }
-    let maximumDimension: CGFloat = 1_600
-    let pixelWidth = image.size.width * image.scale
-    let pixelHeight = image.size.height * image.scale
-    let longest = max(pixelWidth, pixelHeight)
-    guard longest > maximumDimension else {
-        return image.jpegData(compressionQuality: 0.82)
-    }
+@MainActor
+private final class CoffeeImageCache {
+    static let shared = CoffeeImageCache()
 
-    let scale = maximumDimension / longest
-    let targetSize = CGSize(
-        width: max(1, pixelWidth * scale),
-        height: max(1, pixelHeight * scale)
-    )
-    let renderer = UIGraphicsImageRenderer(size: targetSize)
-    let resized = renderer.image { _ in
-        image.draw(in: CGRect(origin: .zero, size: targetSize))
+    private let cache: NSCache<NSData, UIImage> = {
+        let cache = NSCache<NSData, UIImage>()
+        cache.countLimit = 120
+        cache.totalCostLimit = 32 * 1_024 * 1_024
+        return cache
+    }()
+
+    func image(for data: Data) -> UIImage? {
+        let key = data as NSData
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = UIImage(data: data) else { return nil }
+        cache.setObject(image, forKey: key, cost: data.count)
+        return image
     }
-    return resized.jpegData(compressionQuality: 0.82)
+}
+
+private func normalizedCoffeePhotoData(_ data: Data) -> Data? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, [
+        kCGImageSourceShouldCache: false
+    ] as CFDictionary) else { return nil }
+    let options = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceThumbnailMaxPixelSize: 1_600,
+        kCGImageSourceShouldCacheImmediately: true
+    ] as CFDictionary
+    guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+
+    let output = NSMutableData()
+    guard let destination = CGImageDestinationCreateWithData(
+        output,
+        UTType.jpeg.identifier as CFString,
+        1,
+        nil
+    ) else { return nil }
+    CGImageDestinationAddImage(destination, thumbnail, [
+        kCGImageDestinationLossyCompressionQuality: 0.82
+    ] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return output as Data
 }
 
 private struct TastingSlider: View {

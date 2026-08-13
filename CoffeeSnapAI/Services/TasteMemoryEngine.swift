@@ -100,7 +100,7 @@ struct TasteMemoryEngine: Sendable {
         let signalsByCandidate = Dictionary(grouping: signals, by: \.coffeeID)
         let sensoryCorrection = learnedSensoryCorrection(memories: memories, candidates: candidates)
 
-        var pool = candidates.map { candidate -> MemoryRecommendation in
+        var pool = candidates.map { candidate -> RankedCandidate in
             // Catalog descriptors are a population prior. Once a user adjusts
             // predicted tasting axes, a shrinkage estimate becomes their private
             // sensory lens for all future candidates.
@@ -127,16 +127,19 @@ struct TasteMemoryEngine: Sendable {
                 0.04
             ).clamped(to: 0...1)
             let isExploration = triedCount == 0 && semanticNovelty > 0.18
-            return MemoryRecommendation(
-                candidate: candidate,
-                match: match,
-                novelty: semanticNovelty,
-                score: score,
-                reason: explanation(for: candidate, profile: profile, isExploration: isExploration),
-                isExploration: isExploration,
-                behaviorAffinity: behaviorAffinity,
-                selectionProbability: 1,
-                policyActions: []
+            return RankedCandidate(
+                recommendation: MemoryRecommendation(
+                    candidate: candidate,
+                    match: match,
+                    novelty: semanticNovelty,
+                    score: score,
+                    reason: explanation(for: candidate, profile: profile, isExploration: isExploration),
+                    isExploration: isExploration,
+                    behaviorAffinity: behaviorAffinity,
+                    selectionProbability: 1,
+                    policyActions: []
+                ),
+                vector: vector
             )
         }
 
@@ -145,11 +148,14 @@ struct TasteMemoryEngine: Sendable {
         // probability. This bounded randomization creates the overlap required
         // for counterfactual evaluation without turning discovery into roulette.
         var selected: [MemoryRecommendation] = []
+        var selectedVectors: [[Float]] = []
         var random = SplitMix64(seed: samplingSeed)
         let explorationMass = (0.08 + 0.12 * profile.adventure).clamped(to: 0.08...0.20)
         let temperature = 0.055 + 0.035 * profile.adventure
         while !pool.isEmpty, selected.count < limit {
-            let utilities = pool.map { diversifiedScore($0, selected: selected) }
+            let utilities = pool.map {
+                diversifiedScore($0.recommendation, vector: $0.vector, selectedVectors: selectedVectors)
+            }
             let probabilities = boundedSoftmax(
                 utilities,
                 temperature: temperature,
@@ -157,24 +163,26 @@ struct TasteMemoryEngine: Sendable {
             )
             let actions = zip(zip(pool, utilities), probabilities).map { pair, probability in
                 PolicyActionProbability(
-                    candidateID: pair.0.id,
+                    candidateID: pair.0.recommendation.id,
                     utility: pair.1,
                     probability: probability
                 )
             }
             let nextIndex = random.sampleIndex(probabilities)
             let choice = pool.remove(at: nextIndex)
+            let recommendation = choice.recommendation
             selected.append(MemoryRecommendation(
-                candidate: choice.candidate,
-                match: choice.match,
-                novelty: choice.novelty,
-                score: choice.score,
-                reason: choice.reason,
-                isExploration: choice.isExploration,
-                behaviorAffinity: choice.behaviorAffinity,
+                candidate: recommendation.candidate,
+                match: recommendation.match,
+                novelty: recommendation.novelty,
+                score: recommendation.score,
+                reason: recommendation.reason,
+                isExploration: recommendation.isExploration,
+                behaviorAffinity: recommendation.behaviorAffinity,
                 selectionProbability: probabilities[nextIndex],
                 policyActions: actions
             ))
+            selectedVectors.append(choice.vector)
         }
         return selected
     }
@@ -453,12 +461,12 @@ struct TasteMemoryEngine: Sendable {
 
     private func diversifiedScore(
         _ recommendation: MemoryRecommendation,
-        selected: [MemoryRecommendation]
+        vector: [Float],
+        selectedVectors: [[Float]]
     ) -> Double {
-        guard !selected.isEmpty else { return recommendation.score }
-        let vector = embedding.embed(recommendation.candidate.asAnalyzedCoffee)
-        let redundancy = selected
-            .map { embedding.cosineSimilarity(vector, embedding.embed($0.candidate.asAnalyzedCoffee)) }
+        guard !selectedVectors.isEmpty else { return recommendation.score }
+        let redundancy = selectedVectors
+            .map { embedding.cosineSimilarity(vector, $0) }
             .max() ?? 0
         return recommendation.score - max(0, redundancy) * 0.14
     }
@@ -486,6 +494,11 @@ struct TasteMemoryEngine: Sendable {
         guard magnitude > 0 else { return vector }
         return vector.map { $0 / magnitude }
     }
+}
+
+private struct RankedCandidate {
+    let recommendation: MemoryRecommendation
+    let vector: [Float]
 }
 
 private struct SensoryCorrection {

@@ -58,9 +58,16 @@ struct CoffeeEmbeddingService: Sendable {
 
     private func semanticProjection(for text: String, dimension: Int) -> [Float] {
         guard !text.isEmpty else { return Array(repeating: 0, count: dimension) }
+        let normalizedText = text.lowercased()
+        let cacheKey = "\(Self.modelVersion)|\(dimension)|\(normalizedText)"
+        return SemanticProjectionCache.shared.value(for: cacheKey) {
+            computeSemanticProjection(for: normalizedText, dimension: dimension)
+        }
+    }
 
+    private func computeSemanticProjection(for normalizedText: String, dimension: Int) -> [Float] {
         if let embedding = NLEmbedding.sentenceEmbedding(for: .english),
-           let source = embedding.vector(for: text.lowercased()) {
+           let source = embedding.vector(for: normalizedText) {
             var projection = Array(repeating: Float.zero, count: dimension)
             for (index, value) in source.enumerated() {
                 let bucket = (index &* 31 &+ 7) % dimension
@@ -71,7 +78,7 @@ struct CoffeeEmbeddingService: Sendable {
         }
 
         var projection = Array(repeating: Float.zero, count: dimension)
-        let tokens = text.lowercased().split { !$0.isLetter && !$0.isNumber }
+        let tokens = normalizedText.split { !$0.isLetter && !$0.isNumber }
         for token in tokens {
             let hash = stableHash(String(token))
             let bucket = Int(hash % UInt64(dimension))
@@ -116,3 +123,28 @@ struct CoffeeEmbeddingService: Sendable {
     }
 }
 
+private final class SemanticProjectionCache: @unchecked Sendable {
+    static let shared = SemanticProjectionCache()
+
+    private let cache: NSCache<NSString, ProjectionBox> = {
+        let cache = NSCache<NSString, ProjectionBox>()
+        cache.countLimit = 512
+        return cache
+    }()
+
+    func value(for key: String, create: () -> [Float]) -> [Float] {
+        let cacheKey = key as NSString
+        if let cached = cache.object(forKey: cacheKey) { return cached.values }
+        let values = create()
+        cache.setObject(ProjectionBox(values), forKey: cacheKey)
+        return values
+    }
+}
+
+private final class ProjectionBox: NSObject {
+    let values: [Float]
+
+    init(_ values: [Float]) {
+        self.values = values
+    }
+}

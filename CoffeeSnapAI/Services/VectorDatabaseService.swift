@@ -31,8 +31,10 @@ struct VisualSearchResult: Equatable, Sendable {
 protocol VectorMemoryRepository: Sendable {
     func initialize() async throws
     func upsert(_ coffee: AnalyzedCoffee, cards: [ReviewCard]) async throws
+    func saveTasting(_ coffee: AnalyzedCoffee, cards: [ReviewCard], signals: [MemorySignal]) async throws
     func loadCoffees() async throws -> [AnalyzedCoffee]
     func append(_ signal: MemorySignal) async throws
+    func append(_ signals: [MemorySignal]) async throws
     func loadSignals() async throws -> [MemorySignal]
     func loadReviewCards() async throws -> [ReviewCard]
     func update(_ card: ReviewCard) async throws
@@ -40,6 +42,23 @@ protocol VectorMemoryRepository: Sendable {
     func saveCalibration(_ calibration: TasteCalibration) async throws
     func loadCalibration() async throws -> TasteCalibration?
     func searchVisually(similarTo imageData: Data, limit: Int) async throws -> [VisualSearchResult]
+}
+
+extension VectorMemoryRepository {
+    func saveTasting(
+        _ coffee: AnalyzedCoffee,
+        cards: [ReviewCard],
+        signals: [MemorySignal]
+    ) async throws {
+        try await upsert(coffee, cards: cards)
+        try await append(signals)
+    }
+
+    func append(_ signals: [MemorySignal]) async throws {
+        for signal in signals {
+            try await append(signal)
+        }
+    }
 }
 
 /// A private, local-first vector database backed by SQLite WAL.
@@ -102,11 +121,12 @@ actor VectorDatabaseService: VectorMemoryRepository {
         }
         database = connection
 
-        try execute("PRAGMA journal_mode = WAL")
-        try execute("PRAGMA synchronous = NORMAL")
-        try execute("PRAGMA foreign_keys = ON")
-        try execute("PRAGMA busy_timeout = 3000")
-        try execute(
+        do {
+            try execute("PRAGMA journal_mode = WAL")
+            try execute("PRAGMA synchronous = NORMAL")
+            try execute("PRAGMA foreign_keys = ON")
+            try execute("PRAGMA busy_timeout = 3000")
+            try execute(
             """
             CREATE TABLE IF NOT EXISTS coffee_memories (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -171,11 +191,38 @@ actor VectorDatabaseService: VectorMemoryRepository {
         try execute("CREATE INDEX IF NOT EXISTS idx_memory_created ON coffee_memories(created_at DESC)")
         try execute("CREATE INDEX IF NOT EXISTS idx_signal_coffee ON memory_signals(coffee_id, created_at)")
         try execute("CREATE INDEX IF NOT EXISTS idx_review_due ON review_cards(due_at)")
-        try execute("PRAGMA user_version = 4")
+            try execute("PRAGMA user_version = 4")
+        } catch {
+            sqlite3_close(connection)
+            database = nil
+            throw error
+        }
     }
 
     func upsert(_ coffee: AnalyzedCoffee, cards: [ReviewCard]) async throws {
         try await ensureInitialized()
+        let prepared = try prepareCoffeeWrite(coffee)
+        try transaction {
+            try writeCoffee(prepared, cards: cards)
+        }
+    }
+
+    func saveTasting(
+        _ coffee: AnalyzedCoffee,
+        cards: [ReviewCard],
+        signals: [MemorySignal]
+    ) async throws {
+        try await ensureInitialized()
+        let prepared = try prepareCoffeeWrite(coffee)
+        try transaction {
+            try writeCoffee(prepared, cards: cards)
+            for signal in signals {
+                try writeSignal(signal)
+            }
+        }
+    }
+
+    private func prepareCoffeeWrite(_ coffee: AnalyzedCoffee) throws -> PreparedCoffeeWrite {
         let coffeeData: Data
         do {
             coffeeData = try encoder.encode(coffee)
@@ -192,6 +239,17 @@ actor VectorDatabaseService: VectorMemoryRepository {
             visualVector = coffee.imageData.flatMap { try? visualEmbedding.embed($0) }
         }
         let visualData = visualVector.map(data(from:))
+        return PreparedCoffeeWrite(
+            coffee: coffee,
+            coffeeData: coffeeData,
+            vectorData: vectorData,
+            visualData: visualData,
+            visualSourceHash: visualSourceHash
+        )
+    }
+
+    private func writeCoffee(_ prepared: PreparedCoffeeWrite, cards: [ReviewCard]) throws {
+        let coffee = prepared.coffee
         let sql = """
             INSERT INTO coffee_memories
                 (id, coffee_json, embedding, embedding_model, search_text, created_at, rating, visual_embedding, visual_model, visual_source_hash)
@@ -207,37 +265,35 @@ actor VectorDatabaseService: VectorMemoryRepository {
                 visual_source_hash = excluded.visual_source_hash
             """
 
-        try transaction {
-            let statement = try prepare(sql)
-            defer { sqlite3_finalize(statement) }
-            bind(coffee.id.uuidString, to: 1, in: statement)
-            bind(coffeeData, to: 2, in: statement)
-            bind(vectorData, to: 3, in: statement)
-            bind(CoffeeEmbeddingService.modelVersion, to: 4, in: statement)
-            bind(embedding.searchableText(for: coffee), to: 5, in: statement)
-            sqlite3_bind_double(statement, 6, coffee.analysisDate.timeIntervalSince1970)
-            if let rating = coffee.rating {
-                sqlite3_bind_double(statement, 7, rating)
-            } else {
-                sqlite3_bind_null(statement, 7)
-            }
-            if let visualData {
-                bind(visualData, to: 8, in: statement)
-                bind(VisualEmbeddingService.modelVersion, to: 9, in: statement)
-            } else {
-                sqlite3_bind_null(statement, 8)
-                sqlite3_bind_null(statement, 9)
-            }
-            if let visualSourceHash {
-                bind(visualSourceHash, to: 10, in: statement)
-            } else {
-                sqlite3_bind_null(statement, 10)
-            }
-            try step(statement)
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+        bind(coffee.id.uuidString, to: 1, in: statement)
+        bind(prepared.coffeeData, to: 2, in: statement)
+        bind(prepared.vectorData, to: 3, in: statement)
+        bind(CoffeeEmbeddingService.modelVersion, to: 4, in: statement)
+        bind(embedding.searchableText(for: coffee), to: 5, in: statement)
+        sqlite3_bind_double(statement, 6, coffee.analysisDate.timeIntervalSince1970)
+        if let rating = coffee.rating {
+            sqlite3_bind_double(statement, 7, rating)
+        } else {
+            sqlite3_bind_null(statement, 7)
+        }
+        if let visualData = prepared.visualData {
+            bind(visualData, to: 8, in: statement)
+            bind(VisualEmbeddingService.modelVersion, to: 9, in: statement)
+        } else {
+            sqlite3_bind_null(statement, 8)
+            sqlite3_bind_null(statement, 9)
+        }
+        if let visualSourceHash = prepared.visualSourceHash {
+            bind(visualSourceHash, to: 10, in: statement)
+        } else {
+            sqlite3_bind_null(statement, 10)
+        }
+        try step(statement)
 
-            for card in cards {
-                try insertCardIfNeeded(card)
-            }
+        for card in cards {
+            try insertCardIfNeeded(card)
         }
     }
 
@@ -246,7 +302,7 @@ actor VectorDatabaseService: VectorMemoryRepository {
         let statement = try prepare("SELECT coffee_json FROM coffee_memories ORDER BY created_at DESC")
         defer { sqlite3_finalize(statement) }
         var coffees: [AnalyzedCoffee] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             let payload = blob(at: 0, in: statement)
             do {
                 coffees.append(try decoder.decode(AnalyzedCoffee.self, from: payload))
@@ -259,6 +315,19 @@ actor VectorDatabaseService: VectorMemoryRepository {
 
     func append(_ signal: MemorySignal) async throws {
         try await ensureInitialized()
+        try writeSignal(signal)
+    }
+
+    func append(_ signals: [MemorySignal]) async throws {
+        try await ensureInitialized()
+        try transaction {
+            for signal in signals {
+                try writeSignal(signal)
+            }
+        }
+    }
+
+    private func writeSignal(_ signal: MemorySignal) throws {
         let payload: Data
         do {
             payload = try encoder.encode(signal)
@@ -285,7 +354,7 @@ actor VectorDatabaseService: VectorMemoryRepository {
         )
         defer { sqlite3_finalize(statement) }
         var signals: [MemorySignal] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             if sqlite3_column_type(statement, 5) != SQLITE_NULL,
                let decoded = try? decoder.decode(MemorySignal.self, from: blob(at: 5, in: statement)) {
                 signals.append(decoded)
@@ -310,7 +379,7 @@ actor VectorDatabaseService: VectorMemoryRepository {
         let statement = try prepare("SELECT card_json FROM review_cards ORDER BY due_at ASC")
         defer { sqlite3_finalize(statement) }
         var cards: [ReviewCard] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             do {
                 cards.append(try decoder.decode(ReviewCard.self, from: blob(at: 0, in: statement)))
             } catch {
@@ -377,7 +446,7 @@ actor VectorDatabaseService: VectorMemoryRepository {
         try await ensureInitialized()
         let statement = try prepare("SELECT value FROM profile_state WHERE key = 'calibration'")
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        guard try nextRow(statement) else { return nil }
         do {
             return try decoder.decode(TasteCalibration.self, from: blob(at: 0, in: statement))
         } catch {
@@ -391,32 +460,37 @@ actor VectorDatabaseService: VectorMemoryRepository {
         limit: Int = 5
     ) async throws -> [VectorSearchResult] {
         try await ensureInitialized()
-        let sql: String
-        if type == nil {
-            sql = "SELECT coffee_json, embedding, embedding_model FROM coffee_memories WHERE id != ?"
-        } else {
-            // Coffee type lives in the JSON document, so filtering the decoded
-            // object keeps schema migration-free while this collection is small.
-            sql = "SELECT coffee_json, embedding, embedding_model FROM coffee_memories WHERE id != ?"
-        }
-        let statement = try prepare(sql)
+        let statement = try prepare(
+            "SELECT id, embedding, embedding_model FROM coffee_memories WHERE id != ?"
+        )
         defer { sqlite3_finalize(statement) }
         bind(coffee.id.uuidString, to: 1, in: statement)
         let query = embedding.embed(coffee)
-        var results: [VectorSearchResult] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let storedCoffee = try decoder.decode(AnalyzedCoffee.self, from: blob(at: 0, in: statement))
-            guard type == nil || storedCoffee.coffeeType == type else { continue }
+        var ranked: [(id: UUID, similarity: Double)] = []
+        while try nextRow(statement) {
+            guard let id = UUID(uuidString: text(at: 0, in: statement)) else { continue }
             let version = text(at: 2, in: statement)
-            let storedVector = version == CoffeeEmbeddingService.modelVersion
-                ? vector(from: blob(at: 1, in: statement))
-                : embedding.embed(storedCoffee)
+            let storedCoffee: AnalyzedCoffee?
+            let storedVector: [Float]
+            if version == CoffeeEmbeddingService.modelVersion {
+                storedVector = vector(from: blob(at: 1, in: statement))
+                storedCoffee = type == nil ? nil : try loadCoffee(id: id)
+            } else {
+                let decoded = try loadCoffee(id: id)
+                storedCoffee = decoded
+                storedVector = embedding.embed(decoded)
+            }
+            guard type == nil || storedCoffee?.coffeeType == type else { continue }
+            ranked.append((id, embedding.cosineSimilarity(query, storedVector)))
+        }
+        var results: [VectorSearchResult] = []
+        for item in ranked.sorted(by: { $0.similarity > $1.similarity }).prefix(max(0, limit)) {
             results.append(VectorSearchResult(
-                coffee: storedCoffee,
-                similarity: embedding.cosineSimilarity(query, storedVector)
+                coffee: try loadCoffee(id: item.id),
+                similarity: item.similarity
             ))
         }
-        return Array(results.sorted { $0.similarity > $1.similarity }.prefix(max(0, limit)))
+        return results
     }
 
     func searchVisually(
@@ -426,38 +500,42 @@ actor VectorDatabaseService: VectorMemoryRepository {
         try await ensureInitialized()
         let query = try visualEmbedding.embed(imageData)
         let statement = try prepare(
-            "SELECT coffee_json, visual_embedding, visual_model FROM coffee_memories"
+            "SELECT id, visual_embedding, visual_model FROM coffee_memories"
         )
         defer { sqlite3_finalize(statement) }
-        var results: [VisualSearchResult] = []
+        var ranked: [(id: UUID, similarity: Double)] = []
         var pendingReindex: [(id: UUID, vector: [Float], sourceHash: String)] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            let coffee = try decoder.decode(AnalyzedCoffee.self, from: blob(at: 0, in: statement))
+        while try nextRow(statement) {
+            guard let id = UUID(uuidString: text(at: 0, in: statement)) else { continue }
             let version = text(at: 2, in: statement)
             let storedVector: [Float]
             if sqlite3_column_type(statement, 1) != SQLITE_NULL,
                version == VisualEmbeddingService.modelVersion {
                 storedVector = vector(from: blob(at: 1, in: statement))
-            } else if let storedImage = coffee.imageData,
+            } else if let storedImage = try loadCoffee(id: id).imageData,
                       let generatedVector = try? visualEmbedding.embed(storedImage) {
                 storedVector = generatedVector
                 pendingReindex.append((
-                    id: coffee.id,
+                    id: id,
                     vector: storedVector,
                     sourceHash: sourceHash(storedImage)
                 ))
             } else {
                 continue
             }
-            results.append(VisualSearchResult(
-                coffee: coffee,
-                similarity: visualEmbedding.similarity(query, storedVector)
-            ))
+            ranked.append((id, visualEmbedding.similarity(query, storedVector)))
         }
         for item in pendingReindex {
             try updateVisualIndex(item.vector, for: item.id, sourceHash: item.sourceHash)
         }
-        return Array(results.sorted { $0.similarity > $1.similarity }.prefix(max(0, limit)))
+        var results: [VisualSearchResult] = []
+        for item in ranked.sorted(by: { $0.similarity > $1.similarity }).prefix(max(0, limit)) {
+            results.append(VisualSearchResult(
+                coffee: try loadCoffee(id: item.id),
+                similarity: item.similarity
+            ))
+        }
+        return results
     }
 
     func counts() async throws -> (memories: Int, signals: Int, reviews: Int) {
@@ -531,10 +609,23 @@ actor VectorDatabaseService: VectorMemoryRepository {
         }
     }
 
+    private func nextRow(_ statement: OpaquePointer) throws -> Bool {
+        let result = sqlite3_step(statement)
+        switch result {
+        case SQLITE_ROW:
+            return true
+        case SQLITE_DONE:
+            return false
+        default:
+            let message = database.map { String(cString: sqlite3_errmsg($0)) } ?? "SQLite read failed"
+            throw VectorDatabaseError.execute(message)
+        }
+    }
+
     private func scalarInt(_ sql: String) throws -> Int {
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
-        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        guard try nextRow(statement) else { return 0 }
         return Int(sqlite3_column_int64(statement, 0))
     }
 
@@ -546,9 +637,23 @@ actor VectorDatabaseService: VectorMemoryRepository {
         bind(id.uuidString, to: 1, in: statement)
         bind(VisualEmbeddingService.modelVersion, to: 2, in: statement)
         bind(sourceHash, to: 3, in: statement)
-        guard sqlite3_step(statement) == SQLITE_ROW,
+        guard try nextRow(statement),
               sqlite3_column_type(statement, 0) != SQLITE_NULL else { return nil }
         return vector(from: blob(at: 0, in: statement))
+    }
+
+    private func loadCoffee(id: UUID) throws -> AnalyzedCoffee {
+        let statement = try prepare("SELECT coffee_json FROM coffee_memories WHERE id = ?")
+        defer { sqlite3_finalize(statement) }
+        bind(id.uuidString, to: 1, in: statement)
+        guard try nextRow(statement) else {
+            throw VectorDatabaseError.decode("A referenced coffee memory is missing.")
+        }
+        do {
+            return try decoder.decode(AnalyzedCoffee.self, from: blob(at: 0, in: statement))
+        } catch {
+            throw VectorDatabaseError.decode(error.localizedDescription)
+        }
     }
 
     private func updateVisualIndex(_ vector: [Float], for id: UUID, sourceHash: String) throws {
@@ -570,7 +675,7 @@ actor VectorDatabaseService: VectorMemoryRepository {
     private func columnExists(_ column: String, in table: String) throws -> Bool {
         let statement = try prepare("PRAGMA table_info(\(table))")
         defer { sqlite3_finalize(statement) }
-        while sqlite3_step(statement) == SQLITE_ROW {
+        while try nextRow(statement) {
             if text(at: 1, in: statement) == column { return true }
         }
         return false
@@ -616,4 +721,12 @@ actor VectorDatabaseService: VectorMemoryRepository {
             .appendingPathComponent("CoffeeSnapAI", isDirectory: true)
             .appendingPathComponent("taste-memory-v2.sqlite")
     }
+}
+
+private struct PreparedCoffeeWrite {
+    let coffee: AnalyzedCoffee
+    let coffeeData: Data
+    let vectorData: Data
+    let visualData: Data?
+    let visualSourceHash: String?
 }

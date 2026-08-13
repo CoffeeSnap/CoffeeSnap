@@ -46,6 +46,133 @@ final class VectorDatabaseIntegrationTests: XCTestCase {
         XCTAssertEqual(counts.reviews, cards.count)
     }
 
+    @MainActor
+    func testFailedSignalWriteRollsBackTastingAndKeepsVisibleFeedbackTruthful() async throws {
+        let existing = makeCoffee(
+            id: "A0A0A0A0-A0A0-40A0-80A0-A0A0A0A0A0A0",
+            type: .flatWhite,
+            acidity: 0.4,
+            sweetness: 0.8
+        )
+        try await database.upsert(existing, cards: [])
+        let store = CoffeeStore(database: database)
+        await store.start()
+
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &connection), SQLITE_OK)
+        defer { sqlite3_close(connection) }
+        let rejectSignals = """
+            CREATE TRIGGER reject_test_signals
+            BEFORE INSERT ON memory_signals
+            BEGIN
+                SELECT RAISE(ABORT, 'intentional test failure');
+            END;
+            """
+        XCTAssertEqual(sqlite3_exec(connection, rejectSignals, nil, nil, nil), SQLITE_OK)
+
+        let didRate = await store.rate(existing.id, rating: 1)
+        let didFavorite = await store.toggleFavorite(existing.id)
+        XCTAssertFalse(didRate)
+        XCTAssertFalse(didFavorite)
+        XCTAssertEqual(store.coffees.first?.rating, existing.rating)
+        XCTAssertFalse(store.favorites.contains(existing.id))
+
+        let newCoffee = makeCoffee(
+            id: "B0B0B0B0-B0B0-40B0-80B0-B0B0B0B0B0B0",
+            type: .pourOver,
+            acidity: 0.8,
+            sweetness: 0.7
+        )
+        let didSave = await store.addCoffee(newCoffee)
+        XCTAssertFalse(didSave)
+        XCTAssertFalse(store.coffees.contains(where: { $0.id == newCoffee.id }))
+
+        let stored = try await database.loadCoffees()
+        let storedSignals = try await database.loadSignals()
+        XCTAssertEqual(stored, [existing])
+        XCTAssertTrue(storedSignals.isEmpty)
+    }
+
+    func testInitializationCanRetryAfterMigrationFailure() async throws {
+        let brokenURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("coffeesnap-broken-\(UUID().uuidString).sqlite")
+        defer {
+            for suffix in ["", "-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: brokenURL.path + suffix)
+            }
+        }
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(brokenURL.path, &connection), SQLITE_OK)
+        XCTAssertEqual(
+            sqlite3_exec(connection, "CREATE TABLE coffee_memories (id TEXT PRIMARY KEY)", nil, nil, nil),
+            SQLITE_OK
+        )
+        sqlite3_close(connection)
+
+        let recovering = VectorDatabaseService(databaseURL: brokenURL)
+        do {
+            try await recovering.initialize()
+            XCTFail("A malformed legacy schema should fail initialization")
+        } catch {
+            // Expected: initialization must close the failed connection so a retry is possible.
+        }
+
+        for suffix in ["", "-wal", "-shm"] {
+            try? FileManager.default.removeItem(atPath: brokenURL.path + suffix)
+        }
+        try await recovering.initialize()
+        let counts = try await recovering.counts()
+        XCTAssertEqual(counts.memories, 0)
+        XCTAssertEqual(counts.signals, 0)
+        XCTAssertEqual(counts.reviews, 0)
+    }
+
+    @MainActor
+    func testStartupFailureShowsRecoveryInsteadOfFalseOnboarding() async {
+        let directoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("coffeesnap-not-a-database-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let store = CoffeeStore(database: VectorDatabaseService(databaseURL: directoryURL))
+
+        await store.start()
+
+        XCTAssertTrue(store.hasStarted)
+        XCTAssertTrue(store.startupFailed)
+        XCTAssertFalse(store.needsCalibration)
+        XCTAssertNotNil(store.errorMessage)
+    }
+
+    func testSignalBatchRollsBackWhenOneEventFails() async throws {
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &connection), SQLITE_OK)
+        defer { sqlite3_close(connection) }
+        let rejectSkip = """
+            CREATE TRIGGER reject_skip_signal
+            BEFORE INSERT ON memory_signals
+            WHEN NEW.kind = 'recommendationSkipped'
+            BEGIN
+                SELECT RAISE(ABORT, 'intentional batch failure');
+            END;
+            """
+        XCTAssertEqual(sqlite3_exec(connection, rejectSkip, nil, nil, nil), SQLITE_OK)
+        let candidateID = UUID()
+        let batch = [
+            MemorySignal(coffeeID: candidateID, kind: .recommendationShown, value: 1),
+            MemorySignal(coffeeID: candidateID, kind: .recommendationSkipped, value: 0)
+        ]
+
+        do {
+            try await database.append(batch)
+            XCTFail("The trigger should reject the second event")
+        } catch {
+            // Expected. The first event must roll back with the rejected second event.
+        }
+
+        let signals = try await database.loadSignals()
+        XCTAssertTrue(signals.isEmpty)
+    }
+
     func testExactVectorSearchRanksClosestCoffeeFirst() async throws {
         let query = makeCoffee(
             id: "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB",
@@ -167,6 +294,8 @@ final class VectorDatabaseIntegrationTests: XCTestCase {
         })
         await store.recordRecommendation(recommendation, opened: true)
 
+        let relaunchedStore = CoffeeStore(database: database)
+        await relaunchedStore.start()
         let candidate = recommendation.candidate
         let tasting = AnalyzedCoffee(
             imageData: nil,
@@ -180,7 +309,7 @@ final class VectorDatabaseIntegrationTests: XCTestCase {
             rating: 4,
             sourceCandidateID: candidate.id
         )
-        await store.addCoffee(tasting)
+        await relaunchedStore.addCoffee(tasting)
 
         var conversions = try await database.loadSignals().filter {
             $0.kind == .recommendationConverted && $0.coffeeID == candidate.id
@@ -191,7 +320,7 @@ final class VectorDatabaseIntegrationTests: XCTestCase {
         XCTAssertEqual(conversion.position, shown.position)
         XCTAssertEqual(conversion.policyProbability, shown.policyProbability)
 
-        await store.rate(tasting.id, rating: 5)
+        await relaunchedStore.rate(tasting.id, rating: 5)
         conversions = try await database.loadSignals().filter {
             $0.kind == .recommendationConverted && $0.coffeeID == candidate.id
         }

@@ -5,25 +5,41 @@ struct ContentView: View {
     @State private var selection: AppSection = .memory
 
     var body: some View {
-        TabView(selection: $selection) {
-            MemoryHomeView()
-                .tabItem { Label("Memory", systemImage: "sparkles") }
-                .tag(AppSection.memory)
+        Group {
+            if store.startupFailed {
+                ContentUnavailableView {
+                    Label("Taste memory unavailable", systemImage: "externaldrive.badge.exclamationmark")
+                } description: {
+                    Text(store.errorMessage ?? "CoffeeSnap could not open your private memory.")
+                } actions: {
+                    Button("Try again") {
+                        Task { await store.start() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(CoffeeTheme.roast)
+                }
+            } else {
+                TabView(selection: $selection) {
+                    MemoryHomeView()
+                        .tabItem { Label("Memory", systemImage: "sparkles") }
+                        .tag(AppSection.memory)
 
-            DiscoverView()
-                .tabItem { Label("Discover", systemImage: "scope") }
-                .tag(AppSection.discover)
+                    DiscoverView()
+                        .tabItem { Label("Discover", systemImage: "scope") }
+                        .tag(AppSection.discover)
 
-            LearningLabView()
-                .tabItem { Label("Taste Lab", systemImage: "brain.head.profile") }
-                .badge(store.dashboard.dueCards.count)
-                .tag(AppSection.learn)
+                    LearningLabView()
+                        .tabItem { Label("Taste Lab", systemImage: "brain.head.profile") }
+                        .badge(store.dashboard.dueCards.count)
+                        .tag(AppSection.learn)
 
-            CoffeeJournalView()
-                .tabItem { Label("Journal", systemImage: "books.vertical.fill") }
-                .tag(AppSection.journal)
+                    CoffeeJournalView()
+                        .tabItem { Label("Journal", systemImage: "books.vertical.fill") }
+                        .tag(AppSection.journal)
+                }
+                .tint(CoffeeTheme.caramel)
+            }
         }
-        .tint(CoffeeTheme.caramel)
         .task { await store.start() }
         .fullScreenCover(isPresented: Binding(
             get: { store.needsCalibration },
@@ -35,7 +51,7 @@ struct ContentView: View {
         .alert(
             "Taste memory needs attention",
             isPresented: Binding(
-                get: { store.errorMessage != nil },
+                get: { store.errorMessage != nil && !store.startupFailed },
                 set: { if !$0 { store.clearError() } }
             )
         ) {

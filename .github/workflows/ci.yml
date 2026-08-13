@@ -1,0 +1,38 @@
+name: CoffeeSnap CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coffeesnap-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Test and build
+    runs-on: macos-15
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Run memory engine tests
+        run: swift test
+
+      - name: Build production configuration
+        run: >-
+          xcodebuild
+          -project CoffeeSnapAI.xcodeproj
+          -scheme CoffeeSnapAI
+          -configuration Release
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
+          GCC_TREAT_WARNINGS_AS_ERRORS=YES
+          build

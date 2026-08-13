@@ -21,6 +21,7 @@ let package = Package(
                 "CoffeeSnapAIApp.swift",
                 "ContentView.swift",
                 "Info.plist",
+                "PrivacyInfo.xcprivacy",
                 "Preview Content",
                 "Services/CameraService.swift",
                 "Services/MLService.swift",

@@ -6,6 +6,7 @@ CoffeeSnap is now a local-first SwiftUI taste companion. It does more than keep 
 
 - A **versioned 32-dimensional hybrid embedding**: interpretable acidity/body/sweetness/bitterness, roast, confidence and coffee-family features plus a compact projection of Apple's on-device `NLEmbedding`. A deterministic semantic fallback keeps the app functional when the system model is unavailable.
 - A **private multimodal vector database** backed by SQLite WAL. Taste vectors, Apple Vision feature-print vectors, source documents, feedback events and review state are stored atomically and remain available offline.
+- **Failure-safe persistence**: each tasting, its learning signals and recall cards commit as one transaction. Failed writes remain visible for retry without showing state that was never saved.
 - **Truthful visual memory**: users can take or choose a photo, which is resized locally and encoded with pinned Vision feature-print revision 2. The Journal can retrieve visually similar past cups without uploading an image. Unlike the dormant prototype, appearance is never used to invent flavor, brew method or origin.
 - An **honest cold start**: three quick, choice-based palate questions create a low-confidence calibration anchor. The app never invents sample tastings, and real cups progressively overrule that anchor.
 - A **continual taste model** that weights explicit feedback, ML confidence and a 120-day preference half-life. Recent preferences can evolve without erasing older memories.
@@ -15,6 +16,7 @@ CoffeeSnap is now a local-first SwiftUI taste companion. It does more than keep 
 - A **Taste Lab** built around retrieval practice, adaptive spacing and interleaving across origin, flavor, brew and roast concepts. New concepts are staged from 20 minutes through three days instead of producing an exhausting quiz immediately after a tasting.
 - **Counterfactual-ready event telemetry** stored locally with slate position, policy score, exact conditional selection probability, the complete available-action distribution, policy/catalog versions and session ID for shown/opened/skipped/converted recommendations. Ordered-slate propensity is recoverable as the product of its conditional probabilities. Conversion attribution remains attached to the slate the user actually opened, and re-rating a journal memory cannot create a duplicate conversion.
 - A real SwiftUI experience with Memory, Discover, Taste Lab and Journal surfaces, responsive rating/favorite feedback and a guided tasting form.
+- A production-hardened media path that bounds image size, removes imported metadata, prevents stale photo-selection races and caches decoded thumbnails.
 
 ## Why SQLite instead of Pinecone, Weaviate, Chroma or DuckDB?
 
@@ -60,7 +62,7 @@ The ML/persistence core has no third-party package dependency:
 swift test
 ```
 
-The Xcode app target links the system `sqlite3` library. The 24 tests use a separate temporary database for every persistence case and cover calibration, preference learning, temporal decay, candidate feedback, personal sensory correction, bounded stochastic exploration, probability normalization/replay, multi-seed coverage, conversion attribution, policy diagnostics, staged adaptive scheduling, interleaving, taste-vector round trips, real Vision feature-print determinism and ranking, rich event persistence, repeated recommendation tries, deletion boundaries and migrations through multimodal schema v4.
+The Xcode app target links the system `sqlite3` library. The 29 tests use a separate temporary database for every persistence case and cover calibration, preference learning, temporal decay, candidate feedback, personal sensory correction, bounded stochastic exploration, probability normalization/replay, multi-seed coverage, restart-safe conversion attribution, policy diagnostics, staged adaptive scheduling, interleaving, taste-vector round trips, real Vision feature-print determinism and ranking, atomic rollback, startup recovery, rich event persistence, repeated recommendation tries, deletion boundaries and migrations through multimodal schema v4.
 
 ## Deliberate next steps
 
